@@ -1,12 +1,14 @@
 {
-  "name": "bot-whatsapp",
+  "name": "bot-whatsapp-one4cars",
   "version": "1.0.0",
+  "description": "Bot para ONE4CARS",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "whatsapp-web.js": "^1.23.0",
-    "qrcode": "^1.5.3"
+    "qrcode": "^1.5.3",
+    "puppeteer": "^21.0.0"
   }
 }
