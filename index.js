@@ -5,8 +5,8 @@ client.on('message_create', async (msg) => {
     console.log("Mensaje recibido:", mensajeUsuario); // Esto aparecerá en los logs de Render
 
     const saludos = [
-        'hola', 'buendia', 'buen dia', 'buen día', 'buenos dias', 'buenos días',
-        'buenosdias', 'buenosdías', 'bns dias', 'bns días', 'buenas tardes', 'buenas noches'
+        'Buen dia', 'Buen día', 'buendia', 'buen dia', 'buen día', 'buenos dias', 'buenos días',
+        'buenosdias', 'buenosdías', 'bns dias', 'bns días', 'buenas tardes', 'bns tardes','buenas noches'
     ];
 
     // Usamos .includes para que si el saludo está EN CUALQUIER PARTE del mensaje, el bot responda
