@@ -4,7 +4,7 @@ const http = require('http');
 
 let qrCodeData = "";
 
-// Configuración ultra-ligera de Puppeteer para Render
+// Configuración de cliente optimizada para la poca RAM de Render
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -13,22 +13,20 @@ const client = new Client({
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
             '--single-process',
+            '--no-zygote',
             '--disable-gpu'
         ]
     }
 });
 
-// Servidor para que Render no dé error de puerto
+// Servidor Web para ver el QR
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     if (qrCodeData.startsWith("data:image")) {
-        res.write(`<div style="text-align:center;"><h1>Escanea el QR de ONE4CARS</h1><img src="${qrCodeData}" style="width:300px;"></div>`);
+        res.write(`<div style="text-align:center;font-family:Arial;"><h1>Escanea el QR de ONE4CARS</h1><img src="${qrCodeData}" style="width:300px;"></div>`);
     } else {
-        res.write(`<div style="text-align:center;"><h1>${qrCodeData || "Iniciando sistema... refresca en breve."}</h1></div>`);
+        res.write(`<div style="text-align:center;font-family:Arial;"><h1>${qrCodeData || "Iniciando sistema... por favor espera y refresca."}</h1></div>`);
     }
     res.end();
 }).listen(process.env.PORT || 3000);
@@ -40,18 +38,27 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', () => {
-    qrCodeData = "¡Bot de ONE4CARS conectado! ✅";
-    console.log('Bot conectado');
+    qrCodeData = "¡Bot de ONE4CARS conectado con éxito! ✅";
+    console.log('Bot listo');
 });
 
-// Lógica de mensajes
+// RESPUESTAS AUTOMÁTICAS
 client.on('message_create', async (msg) => {
+    // Evitar que el bot se responda a sí mismo
     if (msg.fromMe && msg.body.includes("Bienvenido a *ONE4CARS*")) return;
 
-    const mensajeUsuario = msg.body.toLowerCase().trim();
-    const saludos = ['hola', 'buen dia', 'buen día', 'buendia', 'buenos dias', 'buenos días', 'buenas tardes', 'buenas noches', 'bns dias'];
+    const texto = msg.body.toLowerCase().trim();
 
-    if (saludos.some(s => mensajeUsuario.includes(s))) {
+    // Lista de saludos unificada
+    const saludos = [
+        'hola', 'buendia', 'buen dia', 'buen día', 'buenos dias', 'buenos días', 
+        'buenosdias', 'buenosdías', 'bns dias', 'bns días', 'buenas tardes', 
+        'buenas noches', 'buenas tarder', 'bns tarder'
+    ];
+
+    const esSaludo = saludos.some(s => texto.includes(s));
+
+    if (esSaludo) {
         await client.sendMessage(msg.from, 
             'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\n' +
             'Escribe la *frase* de la opción que necesitas:\n\n' +
@@ -64,26 +71,26 @@ client.on('message_create', async (msg) => {
             '🚚 *Despacho*'
         );
     } 
-    else if (mensajeUsuario.includes('medios de pago')) {
+    else if (texto.includes('medios de pago')) {
         await client.sendMessage(msg.from, '🏦 *MEDIOS DE PAGO*\n\n🔸 *Zelle:* pagos@one4cars.com\n🔸 *Pago Móvil:* Banesco, RIF J-12345678, Tel: 0412-1234567');
     }
-    else if (mensajeUsuario.includes('estado de cuenta')) {
-        await client.sendMessage(msg.from, '📄 *ESTADO DE CUENTA*\n\nPor favor, indique su RIF o Nombre de empresa para generar el reporte.');
+    else if (texto.includes('estado de cuenta')) {
+        await client.sendMessage(msg.from, '📄 *ESTADO DE CUENTA*\n\nPor favor, envíe su RIF o Nombre de empresa para enviarle su reporte.');
     }
-    else if (mensajeUsuario.includes('lista de precios')) {
-        await client.sendMessage(msg.from, '💰 *LISTA DE PRECIOS*\n\nDescárgala aquí: [TU ENLACE]');
+    else if (texto.includes('lista de precios')) {
+        await client.sendMessage(msg.from, '💰 *LISTA DE PRECIOS*\n\nAcceda aquí: [TU_LINK_AQUÍ]');
     }
-    else if (mensajeUsuario.includes('tomar pedido')) {
-        await client.sendMessage(msg.from, '🛒 *PEDIDOS*\n\nIndique Código de producto y Cantidad.');
+    else if (texto.includes('tomar pedido')) {
+        await client.sendMessage(msg.from, '🛒 *TOMAR PEDIDO*\n\nEscriba el código del producto y la cantidad deseada.');
     }
-    else if (mensajeUsuario.includes('mis clientes')) {
-        await client.sendMessage(msg.from, '👥 *CLIENTES*\n\nExclusivo asesores. Ingrese su código.');
+    else if (texto.includes('mis clientes')) {
+        await client.sendMessage(msg.from, '👥 *MIS CLIENTES*\n\nExclusivo para vendedores. Ingrese su código de acceso.');
     }
-    else if (mensajeUsuario.includes('ficha producto')) {
-        await client.sendMessage(msg.from, '⚙️ *FICHA TÉCNICA*\n\nIndique el producto que desea consultar.');
+    else if (texto.includes('ficha producto')) {
+        await client.sendMessage(msg.from, '⚙️ *FICHA PRODUCTO*\n\nIndique el repuesto que desea consultar.');
     }
-    else if (mensajeUsuario.includes('despacho')) {
-        await client.sendMessage(msg.from, '🚚 *DESPACHO*\n\nIndique su número de factura.');
+    else if (texto.includes('despacho')) {
+        await client.sendMessage(msg.from, '🚚 *DESPACHO*\n\nIndique su número de factura para rastreo.');
     }
 });
 
