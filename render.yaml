@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: bot-whatsapp
+    name: bot-whatsapp-one4cars
     env: node
     plan: free
     buildCommand: npm install
@@ -8,3 +8,5 @@ services:
     envVars:
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: "false"
+      - key: DISK_USAGE_LIMIT
+        value: "512"
