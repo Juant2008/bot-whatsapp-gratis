@@ -5,7 +5,7 @@ client.on('message_create', async (msg) => {
     console.log("Mensaje recibido:", mensajeUsuario); // Esto aparecerá en los logs de Render
 
     const saludos = [
-        'Buen dia', 'Buen día', 'buendia', 'buen dia', 'buen día', 'buenos dias', 'buenos días',
+        'Buen dia', 'Buen día', 'buendia', 'Buendia', 'buen dia', 'buen día', 'buenos dias', 'buenos días',
         'buenosdias', 'buenosdías', 'bns dias', 'bns días', 'buenas tardes', 'bns tardes','buenas noches'
     ];
 
