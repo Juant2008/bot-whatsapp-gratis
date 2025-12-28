@@ -6,7 +6,7 @@ client.on('message_create', async (msg) => {
 
     const saludos = [
         'Buen dia', 'Buen día', 'buendia', 'Buendia', 'BuendÍa','buen dia', 'buen día', 'buenos dias', 'buenos días', 'Buenos Días', 'Buenosdias', 'BuenosdÍas',
-        'buenosdias', 'buenosdías', 'bns dias', 'bns días', 'buenas tardes', 'bns tardes','buenas noches'
+        'buenosdias', 'buenosdías', 'bns dias', 'bns días', 'buenas tardes', 'bns tardes','buenas noches','Buenos Dias', 'BUENDIA'
     ];
 
     // Usamos .includes para que si el saludo está EN CUALQUIER PARTE del mensaje, el bot responda
