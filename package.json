@@ -1,5 +1,5 @@
 {
-  "name": "one4cars-baileys",
+  "name": "one4cars-baileys-pro",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.5.0",
-    "qrcode-terminal": "^0.12.0",
+    "@hapi/boom": "^10.0.1",
     "qrcode": "^1.5.3",
     "pino": "^8.14.1"
   }
