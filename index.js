@@ -69,7 +69,7 @@ async function startBot() {
         }
         // 6. FICHA PRODUCTO
         if (body.includes('ficha producto')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para consultar nuestras fichas técnicas de productos\n\nhttps://www.one4cars.com/ficha_producto.php/' });
+            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para consultar nuestras fichas técnicas de productos\n\nhttps://www.one4cars.com/consulta_productos.php/' });
             return;
         }
         // 7. DESPACHO
