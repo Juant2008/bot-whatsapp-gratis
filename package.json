@@ -1,6 +1,6 @@
 {
-  "name": "one4cars-baileys-pro",
-  "version": "1.0.0",
+  "name": "one4cars-bot-final",
+  "version": "2.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,6 +9,7 @@
     "@whiskeysockets/baileys": "^6.5.0",
     "@hapi/boom": "^10.0.1",
     "qrcode": "^1.5.3",
+    "mongoose": "^7.0.0",
     "pino": "^8.14.1"
   }
 }
