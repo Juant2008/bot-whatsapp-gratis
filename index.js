@@ -31,7 +31,9 @@ http.createServer((req, res) => {
         res.write(`<div style="text-align:center;"><h1>Iniciando...</h1></div>`);
     }
     res.end();
-}).listen(process.env.PORT || 3000);
+}).listen(process.env.PORT || 10000, '0.0.0.0', () => {
+    console.log('Servidor web abierto en el puerto 10000');
+});
 
 client.on('qr', (qr) => {
     qrcode.toDataURL(qr, (err, url) => {
