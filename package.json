@@ -9,6 +9,6 @@
   "dependencies": {
     "whatsapp-web.js": "1.23.0",
     "qrcode": "1.5.3",
-    "puppeteer": "21.4.1"
+    "puppeteer-core": "21.4.1"
   }
 }
