@@ -7,6 +7,7 @@ const pino = require('pino');
 let qrCodeData = "";
 
 async function startBot() {
+    // Carpeta 'auth_info' para persistencia de sesión
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
@@ -15,7 +16,12 @@ async function startBot() {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'error' }),
-        browser: ["ONE4CARS", "Chrome", "1.0.0"]
+        browser: ["ONE4CARS", "Chrome", "1.0.0"],
+        // --- AJUSTES PARA EVITAR ERROR 515 Y AHORRAR RAM ---
+        syncFullHistory: false, // NO descarga chats viejos (Evita el crash en Render)
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 10000
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -24,10 +30,13 @@ async function startBot() {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
             qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
+            console.log("✅ Nuevo QR generado.");
         }
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
-            if (statusCode !== DisconnectReason.loggedOut) setTimeout(() => startBot(), 5000);
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log(`Conexión cerrada: ${statusCode}. Reconectando: ${shouldReconnect}`);
+            if (shouldReconnect) setTimeout(() => startBot(), 5000);
         } else if (connection === 'open') {
             qrCodeData = "BOT ONLINE ✅";
             console.log('🚀 ONE4CARS Conectado con éxito');
@@ -42,9 +51,9 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
-        // 1. MEDIOS DE PAGO
-        if (body.includes('medios de pago')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para obtener nuestras formas de pago\n\nhttps://www.one4cars.com/medios_de_pago.php/' });
+        // 1. MEDIOS DE PAGO (Y variantes de cuenta)
+        if (body.includes('medios de pago') || body.includes('numero de cuenta') || body.includes('numeros de cuenta')) {
+            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para obtener nuestras formas de pago y números de cuenta:\n\nhttps://www.one4cars.com/medios_de_pago.php/' });
             return;
         }
         // 2. ESTADO DE CUENTA
@@ -77,15 +86,6 @@ async function startBot() {
             await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/despacho_cliente_web.php/' });
             return;
         }
-        if (body.includes('numero de cuenta')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/medios_de_pago.php/' });
-            return;
-        }
-           if (body.includes('numeros de cuenta')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/medios_de_pago.php/' });
-            return;
-        }     
-        
         // 8. ASESOR
         if (body.includes('asesor')) {
             await sock.sendMessage(from, { text: 'Saludos estimado, en un momento uno de nuestros asesores humanos se pondrá en contacto con usted de forma manual.' });
