@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "postinstall": "npx puppeteer install"
   },
   "dependencies": {
     "whatsapp-web.js": "1.23.0",
-    "qrcode": "1.5.3",
-    "puppeteer": "21.4.1"
+    "qrcode": "1.5.3"
   }
 }
