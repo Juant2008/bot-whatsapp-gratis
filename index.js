@@ -62,7 +62,7 @@ async function startBot() {
         const esSaludo = saludos.some(s => body.includes(s));
 
         // --- RESPUESTA: MENÚ PRINCIPAL ---
-        if (esSaludo && !body.includes('pago') && !body.includes('precio') && !body.includes('cuenta') && !body.includes('pedido')) {
+        if (esSaludo && !body.includes('Medios de Pago') && !body.includes('precio') && !body.includes('cuenta') && !body.includes('pedido')) {
             const menu = 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\n' +
                          'Para ayudarte de forma precisa, por favor escribe la *frase de la opción* que necesitas:\n\n' +
                          '📲 *Menú de Gestión Comercial*\n\n' +
