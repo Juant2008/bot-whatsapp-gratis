@@ -64,7 +64,7 @@ async function startBot() {
         }
         // 5. MIS CLIENTES
         if (body.includes('mis clientes')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para gestionar su cartera de clientes\n\nhttps://www.one4cars.com/mis_clientes.php/' });
+            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para gestionar su cartera de clientes\n\nhttps://www.one4cars.com/acceso_vendedores.php/' });
             return;
         }
         // 6. FICHA PRODUCTO
