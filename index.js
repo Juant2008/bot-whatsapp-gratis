@@ -49,7 +49,7 @@ async function startBot() {
         }
         // 2. ESTADO DE CUENTA
         if (body.includes('estado de cuenta')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para obtener su estado de cuenta detallado\n\nhttps://www.one4cars.com/estado_de_cuenta.php/' });
+            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para obtener su estado de cuenta detallado\n\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php/' });
             return;
         }
         // 3. LISTA DE PRECIOS
