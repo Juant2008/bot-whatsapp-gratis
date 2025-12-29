@@ -23,10 +23,12 @@ const client = new Client({
 // Servidor Web para ver el QR
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    if (qrCodeData.startsWith("data:image")) {
-        res.write(`<div style="text-align:center;font-family:Arial;"><h1>Escanea el QR de ONE4CARS</h1><img src="${qrCodeData}" style="width:300px;"></div>`);
+    if (qrCodeData.includes("data:image")) {
+        res.write(`<div style="text-align:center;"><h1>Escanea el QR</h1><img src="${qrCodeData}"></div>`);
+    } else if (qrCodeData.includes("conectado")) {
+        res.write(`<div style="text-align:center;"><h1>BOT ACTIVO 24/7 ✅</h1><p>ONE4CARS funcionando.</p></div>`);
     } else {
-        res.write(`<div style="text-align:center;font-family:Arial;"><h1>${qrCodeData || "Iniciando sistema... por favor espera y refresca."}</h1></div>`);
+        res.write(`<div style="text-align:center;"><h1>Iniciando...</h1></div>`);
     }
     res.end();
 }).listen(process.env.PORT || 3000);
