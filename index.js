@@ -77,6 +77,15 @@ async function startBot() {
             await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/despacho_cliente_web.php/' });
             return;
         }
+        if (body.includes('numero de cuenta')) {
+            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/medios_de_pago.php/' });
+            return;
+        }
+           if (body.includes('numeros de cuenta')) {
+            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/medios_de_pago.php/' });
+            return;
+        }     
+        
         // 8. ASESOR
         if (body.includes('asesor')) {
             await sock.sendMessage(from, { text: 'Saludos estimado, en un momento uno de nuestros asesores humanos se pondrá en contacto con usted de forma manual.' });
