@@ -1,45 +1,59 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { default: makeWASocket, useMultiFileAuthState, disconnectReason } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
 
 let qrCodeData = "";
 
-const client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        headless: "new",
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    }
-});
+async function startBot() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: true,
+        browser: ["ONE4CARS", "Chrome", "1.0.0"]
+    });
 
-// Servidor para ver el QR
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        if (qr) {
+            qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
+        }
+        if (connection === 'close') {
+            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== disconnectReason.loggedOut;
+            if (shouldReconnect) startBot();
+        } else if (connection === 'open') {
+            qrCodeData = "BOT ONLINE ✅";
+            console.log('Conectado a WhatsApp');
+        }
+    });
+
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const from = msg.key.remoteJid;
+        const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
+
+        const saludos = ['hola', 'buen dia', 'buenos dias', 'buenas tardes', 'buen día'];
+
+        if (saludos.some(s => body.includes(s)) && !body.includes('pago')) {
+            await sock.sendMessage(from, { text: 'Hola! Bienvenido a *ONE4CARS* 🚗.\n\nEscribe la opción:\n🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n👤 *Asesor*' });
+        }
+        if (body.includes('pago')) {
+            await sock.sendMessage(from, { text: '🏦 *PAGOS*\nZelle: pagos@one4cars.com\nPago Móvil: Banesco, J-12345678, 0412-0000000' });
+        }
+    });
+}
+
+// Servidor Web para el QR
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    if (qrCodeData.includes("data:image")) {
-        res.write(`<center><h1>ONE4CARS - Escanea el QR</h1><img src="${qrCodeData}" width="350"></center>`);
-    } else {
-        res.write(`<center><h1>${qrCodeData || "Iniciando... espera 30 segundos."}</h1></center>`);
-    }
+    res.write(`<center><h1>${qrCodeData.includes("data:image") ? `<img src="${qrCodeData}" width="300">` : qrCodeData || "Iniciando..."}</h1></center>`);
     res.end();
-}).listen(process.env.PORT || 8080);
+}).listen(process.env.PORT || 10000);
 
-client.on('qr', (qr) => {
-    qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
-    console.log("QR generado");
-});
-
-client.on('ready', () => {
-    qrCodeData = "¡BOT ONLINE! ✅";
-    console.log("Conectado");
-});
-
-client.on('message_create', async (msg) => {
-    if (msg.fromMe && msg.body.includes("Bienvenido")) return;
-    const t = msg.body.toLowerCase();
-    if (t.includes('hola') || t.includes('buen')) {
-        await client.sendMessage(msg.from, 'Hola! Bienvenido a *ONE4CARS* 🚗.\n\nEscribe la opción:\n🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n👤 *Asesor*');
-    }
-    if (t.includes('pago')) await client.sendMessage(msg.from, '🏦 *PAGOS*\nZelle: pagos@one4cars.com\nPago Móvil: Banesco, J-12345678, 0412-1234567');
-});
-
-client.initialize();
+startBot();
