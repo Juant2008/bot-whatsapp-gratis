@@ -53,7 +53,7 @@ async function startBot() {
 
         // 1. LISTA EXTENDIDA DE SALUDOS
         const saludos = [
-            'hola', 'buendia', 'buen dia', 'buen día', 'buendía', 
+             'buendia', 'buen dia', 'buen día', 'buendía', 
             'buenos dias', 'buenos días', 'buenosdias', 'buenosdías', 
             'buenas tardes', 'buenas noches', 'saludos', 'que tal', 
             'bns dias', 'bns días', 'bns tardes'
