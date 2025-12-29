@@ -1,6 +1,6 @@
 {
-  "name": "one4cars-bot-v5",
-  "version": "1.5.0",
+  "name": "one4cars-bot",
+  "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
