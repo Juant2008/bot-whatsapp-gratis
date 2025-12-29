@@ -74,7 +74,7 @@ async function startBot() {
         }
         // 7. DESPACHO
         if (body.includes('despacho')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/despacho.php/' });
+            await sock.sendMessage(from, { text: 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/despacho_cliente_web.php/' });
             return;
         }
         // 8. ASESOR
