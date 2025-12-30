@@ -98,7 +98,6 @@ async function startBot() {
             if (saludos.some(s => body.includes(s))) {
                 const menu = 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\n' +
                              'Escribe la frase de la opción que necesitas:\n\n' +
-                             '📲 *Menú de Gestión Comercial*\n' +
                              '🏦 *Medios de Pago*\n' +
                              '📄 *Estado de Cuenta*\n' +
                              '💰 *Lista de Precios*\n' +
