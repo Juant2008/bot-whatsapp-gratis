@@ -74,9 +74,10 @@ async function startBot() {
         else if (body.includes('estado de cuenta')) {
             await sock.sendMessage(from, { text: saludoFormal + 'su estado de cuenta:\n\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php/' });
         }
-        else if (body.includes('lista de precios')) {
-            await sock.sendMessage(from, { text: saludoFormal + 'nuestra lista de precios actualizada:\n\nhttps://www.one4cars.com/lista_de_precios.php/' });
-        }
+        else if (body.toLowerCase().includes('lista de precios') || body.toLowerCase().includes('listas de precios')) {
+    await sock.sendMessage(from, { 
+        text: saludoFormal + 'nuestra lista de precios actualizada:\n\nhttps://www.one4cars.com/lista_de_precios.php/' 
+    }
         else if (body.includes('tomar pedido')) {
             await sock.sendMessage(from, { text: saludoFormal + 'realizar la carga de su pedido:\n\nhttps://www.one4cars.com/tomar_pedido.php/' });
         }
