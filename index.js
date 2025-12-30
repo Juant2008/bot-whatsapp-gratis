@@ -104,6 +104,7 @@ async function startBot() {
                              '💰 *Lista de Precios*\n' +
                              '🛒 *Tomar Pedido*\n' +
                              '👥 *Mis Clientes*\n' +
+                              '👥 *Afiliar Clientes*\n' +
                              '⚙️ *Ficha Producto*\n' +
                              '🚚 *Despacho*\n' +
                              '👤 *Asesor*';
