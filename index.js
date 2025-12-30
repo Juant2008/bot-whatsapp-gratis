@@ -81,6 +81,9 @@ async function startBot() {
         else if (body.includes('tomar pedido')) {
             await sock.sendMessage(from, { text: saludoFormal + 'realizar la carga de su pedido:\n\nhttps://www.one4cars.com/tomar_pedido.php/' });
         }
+        else if (body.toLowerCase().includes('Afiliar cliente') || body.toLowerCase().includes('Afiliar Clientes')) {
+            await sock.sendMessage(from, { text: saludoFormal + 'realizar la carga de su pedido:\n\nhttps://www.one4cars.com/afiliacion_cliente.php/' });
+        }
         else if (body.includes('mis clientes')) {
             await sock.sendMessage(from, { text: saludoFormal + 'gestionar su cartera de clientes:\n\nhttps://www.one4cars.com/acceso_vendedores.php/' });
         }
