@@ -15,10 +15,10 @@ async function ejecutarCobranza(sock) {
 
         // Consulta: Clientes con facturas pendientes de más de 30 días
         const [rows] = await connection.execute(
-            `SELECT telefono, cliente, nro_factura, monto 
+            `SELECT telefono, nombres, nro_factura, total 
              FROM tab_facturas 
-             WHERE estatus = 'pendiente' 
-             AND DATEDIFF(CURDATE(), fecha_emision) > 30`
+             WHERE pagada = 'NO' 
+             AND DATEDIFF(CURDATE(), fecha_emision) > 300`
         );
 
         console.log(`📈 Se enviarán ${rows.length} recordatorios.`);
