@@ -8,7 +8,7 @@ const fs = require('fs');
 // ========================================================
 // CONFIGURACIÓN PERMANENTE
 // Reemplaza <db_password> por tu contraseña real abajo
-const mongoURI = "mongodb+srv://one4cars:TU_PASSWORD_AQUI@one4cars.fpwdlwe.mongodb.net/?appName=one4cars";
+const mongoURI = "mongodb+srv://one4cars:<v6228688>@one4cars.fpwdlwe.mongodb.net/?appName=one4cars";
 // ========================================================
 
 let qrCodeData = "";
