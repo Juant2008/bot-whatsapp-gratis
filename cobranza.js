@@ -8,7 +8,6 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-// ... (obtenerVendedores y obtenerZonas se mantienen igual)
 async function obtenerVendedores() {
     let conn;
     try {
@@ -27,85 +26,68 @@ async function obtenerZonas() {
     } catch (e) { return []; } finally { if (conn) await conn.end(); }
 }
 
-async function obtenerListaDeudores() {
+async function obtenerListaDeudores(filtros = {}) {
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
-        const [rows] = await connection.execute(
-            `SELECT celular, nombres, nro_factura, total, abono_factura, 
-            (total - abono_factura) AS saldo_pendiente, fecha_reg,
-            DATEDIFF(CURDATE(), fecha_reg) AS dias_mora
-            FROM tab_facturas 
-            WHERE pagada = 'NO' AND anulado <> 'si' AND id_cliente <> 334
-            AND (total - abono_factura) > 0 
-            AND DATEDIFF(CURDATE(), fecha_reg) > 45
-            ORDER BY fecha_reg ASC`
-        );
+        const minDias = filtros.dias || 30;
+        const vendedor = filtros.vendedor || '';
+        const zona = filtros.zona || '';
+
+        let sql = `
+            SELECT f.celular, f.nombres, f.nro_factura, f.total, f.abono_factura,
+                   (f.total - f.abono_factura) AS saldo_pendiente, f.fecha_reg,
+                   DATEDIFF(CURDATE(), f.fecha_reg) AS dias_mora
+            FROM tab_facturas f
+            WHERE f.pagada = 'NO' AND f.anulado <> 'si' AND f.id_cliente <> 334
+            AND (f.total - f.abono_factura) > 0 
+            AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?
+        `;
+        const params = [minDias];
+        if (vendedor) { sql += ` AND f.vendedor = ?`; params.push(vendedor); }
+        if (zona) { sql += ` AND f.zona = ?`; params.push(zona); }
+        sql += ` ORDER BY dias_mora DESC`;
+
+        const [rows] = await connection.execute(sql, params);
         return rows;
     } catch (error) { return []; } finally { if (connection) await connection.end(); }
 }
 
-async function obtenerDetalleFacturas(listaFacturas) {
-    if (!listaFacturas || listaFacturas.length === 0) return [];
-    let connection;
+async function obtenerDetalleFacturas(ids) {
+    if (!ids || ids.length === 0) return [];
+    let conn;
     try {
-        connection = await mysql.createConnection(dbConfig);
-        const ids = Array.isArray(listaFacturas) ? listaFacturas : [listaFacturas];
-        const placeholders = ids.map(() => '?').join(',');
-        const [rows] = await connection.query(
+        conn = await mysql.createConnection(dbConfig);
+        const formatIds = Array.isArray(ids) ? ids : [ids];
+        const placeholders = formatIds.map(() => '?').join(',');
+        const [rows] = await conn.query(
             `SELECT celular, nombres, nro_factura, (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_mora 
              FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
-            ids
+            formatIds
         );
         return rows;
-    } catch (e) { console.error("[DB ERROR]", e.message); return []; } 
-    finally { if (connection) await connection.end(); }
+    } catch (e) { return []; } finally { if (conn) await conn.end(); }
 }
 
 async function ejecutarEnvioMasivo(sock, deudores) {
-    // VALIDACIÓN CRÍTICA: ¿El bot está realmente listo?
-    if (!sock || !sock.user || !sock.user.id) {
-        console.error("❌ EL BOT NO ESTÁ LISTO: Falta la identidad del usuario (sock.user.id).");
-        return;
-    }
-
-    console.log(`\n--- 🚀 INICIANDO ENVÍO A ${deudores.length} CLIENTES ---`);
+    if (!sock || !sock.user) return console.log("Bot no listo");
     
     for (const row of deudores) {
         try {
-            // Validar que el cliente tenga celular
-            if (!row.celular) {
-                console.log(`⚠️ Saltando a ${row.nombres}: No tiene número de celular.`);
-                continue;
-            }
-
-            // LIMPIEZA QUIRÚRGICA
-            let numRaw = row.celular.toString().replace(/\D/g, ''); 
+            // LIMPIEZA QUIRÚRGICA DEL NÚMERO (Elimina espacios y corrige 580)
+            let num = row.celular.toString().replace(/\D/g, ''); 
+            if (num.startsWith('580')) num = '58' + num.substring(3);
+            else if (!num.startsWith('58')) num = '58' + num;
             
-            if (numRaw.startsWith('580')) {
-                numRaw = '58' + numRaw.substring(3);
-            } else if (!numRaw.startsWith('58')) {
-                numRaw = '58' + numRaw;
-            }
-            
-            const jid = `${numRaw}@s.whatsapp.net`;
+            const jid = `${num}@s.whatsapp.net`;
             const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
-            
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
 
-            console.log(`📤 Enviando a: ${row.nombres} (${jid})`);
-            
-            // Envío con el ID del bot ya verificado
             await sock.sendMessage(jid, { text: texto });
-            
-            console.log(`✅ ENTREGADO`);
-            
+            console.log(`✅ Enviado a ${row.nombres} (${num})`);
             await new Promise(r => setTimeout(r, 15000));
-        } catch (e) { 
-            console.error(`❌ ERROR REAL con ${row.nombres}:`, e.message); 
-        }
+        } catch (e) { console.log("Error envío unitario"); }
     }
-    console.log("--- 🏁 PROCESO TERMINADO ---\n");
 }
 
-module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerDetalleFacturas, obtenerVendedores, obtenerZonas };
+module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas, obtenerDetalleFacturas };
