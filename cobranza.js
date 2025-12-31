@@ -8,6 +8,7 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
+// ... (Funciones obtenerVendedores y obtenerZonas se mantienen igual)
 async function obtenerVendedores() {
     let connection;
     try {
@@ -49,38 +50,38 @@ async function obtenerListaDeudores(filtros = {}) {
         if (idVendedor) { sql += ` AND v.id_vendedor = ?`; params.push(idVendedor); }
         if (idZona) { sql += ` AND z.id_zona = ?`; params.push(idZona); }
         sql += ` ORDER BY dias_transcurridos DESC`;
-
         const [rows] = await connection.execute(sql, params);
         return rows;
     } catch (error) { return []; } finally { if (connection) await connection.end(); }
 }
 
-// FUNCIÓN CORREGIDA PARA BUSCAR SELECCIONADOS
+// ESTA FUNCIÓN ES LA CLAVE: Ahora es más robusta
 async function obtenerDetalleFacturas(facturasIds) {
     if (!facturasIds || facturasIds.length === 0) return [];
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
-        // Aseguramos que facturasIds sea un array de strings limpios
-        const ids = facturasIds.map(id => id.toString());
-        const placeholders = ids.map(() => '?').join(',');
+        const placeholders = facturasIds.map(() => '?').join(',');
+        
+        console.log(`[DB] Buscando datos para facturas: ${facturasIds.join(', ')}`);
         
         const [rows] = await connection.query(
             `SELECT celular, nombres, nro_factura, total, abono_factura, 
             (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_transcurridos 
             FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
-            ids
+            facturasIds
         );
-        console.log(`🔎 Base de datos devolvió ${rows.length} registros de los seleccionados.`);
+        
+        console.log(`[DB] Se encontraron ${rows.length} registros válidos.`);
         return rows;
     } catch (e) { 
-        console.error("❌ Error consultando detalles:", e.message); 
+        console.error("[DB] ERROR:", e.message); 
         return []; 
     } finally { if (connection) await connection.end(); }
 }
 
 async function ejecutarEnvioMasivo(sock, deudores) {
-    console.log(`\n--- 🚀 INICIANDO ENVÍO A ${deudores.length} CLIENTES ---`);
+    console.log(`[WHATSAPP] Iniciando tanda de ${deudores.length} mensajes.`);
     for (const row of deudores) {
         try {
             let num = row.celular.toString().replace(/\D/g, '');
@@ -88,14 +89,18 @@ async function ejecutarEnvioMasivo(sock, deudores) {
             const jid = `${num}@s.whatsapp.net`;
             const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
 
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nEsta factura tiene ${row.dias_transcurridos} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
 
+            console.log(`[WHATSAPP] Enviando a ${row.nombres}...`);
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado con éxito a: ${row.nombres}`);
-            await new Promise(resolve => setTimeout(resolve, 20000));
-        } catch (e) { console.error("❌ Error envío:", e.message); }
+            console.log(`[WHATSAPP] ✅ ENTREGADO`);
+
+            await new Promise(resolve => setTimeout(resolve, 15000));
+        } catch (e) { 
+            console.error(`[WHATSAPP] ❌ ERROR con ${row.nombres}:`, e.message); 
+        }
     }
-    console.log("--- 🏁 FIN DEL PROCESO ---");
+    console.log("[WHATSAPP] --- Proceso terminado ---");
 }
 
 module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas, obtenerDetalleFacturas };
