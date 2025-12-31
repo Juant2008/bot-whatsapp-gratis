@@ -8,6 +8,7 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
+// Obtiene la lista de vendedores activos
 async function obtenerVendedores() {
     let connection;
     try {
@@ -17,6 +18,7 @@ async function obtenerVendedores() {
     } catch (e) { return []; } finally { if (connection) await connection.end(); }
 }
 
+// Obtiene la lista de zonas
 async function obtenerZonas() {
     let connection;
     try {
@@ -26,6 +28,7 @@ async function obtenerZonas() {
     } catch (e) { return []; } finally { if (connection) await connection.end(); }
 }
 
+// Consulta principal de deudores con cálculo de saldo y días
 async function obtenerListaDeudores(filtros = {}) {
     let connection;
     try {
@@ -37,13 +40,14 @@ async function obtenerListaDeudores(filtros = {}) {
         let sql = `
             SELECT f.celular, f.nombres, f.nro_factura, f.total, f.abono_factura,
                    (f.total - f.abono_factura) AS saldo_pendiente,
-                   f.fecha_reg, f.vendedor as vendedor_nom, f.zona as zona_nom,
+                   f.fecha_reg, v.nombre as vendedor_nom, z.zona as zona_nom,
                    DATEDIFF(CURDATE(), f.fecha_reg) AS dias_transcurridos
             FROM tab_facturas f
             LEFT JOIN tab_vendedores v ON f.vendedor = v.nombre
             LEFT JOIN tab_zonas z ON f.zona = z.zona
             WHERE f.pagada = 'NO' AND f.id_cliente <> 334 AND f.anulado <> 'si'
-            AND (f.total - f.abono_factura) > 0 AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?
+            AND (f.total - f.abono_factura) > 0 
+            AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?
         `;
         const params = [minDias];
         if (idVendedor) { sql += ` AND v.id_vendedor = ?`; params.push(idVendedor); }
@@ -52,27 +56,15 @@ async function obtenerListaDeudores(filtros = {}) {
 
         const [rows] = await connection.execute(sql, params);
         return rows;
-    } catch (error) { return []; } finally { if (connection) await connection.end(); }
+    } catch (error) { 
+        console.error("Error DB:", error.message); 
+        return []; 
+    } finally { if (connection) await connection.end(); }
 }
 
-// NUEVA FUNCIÓN: Busca los datos solo de las facturas seleccionadas
-async function obtenerDetalleFacturas(listaFacturas) {
-    if (!listaFacturas || listaFacturas.length === 0) return [];
-    let connection;
-    try {
-        connection = await mysql.createConnection(dbConfig);
-        const placeholders = listaFacturas.map(() => '?').join(',');
-        const [rows] = await connection.execute(
-            `SELECT celular, nombres, nro_factura, total, abono_factura, 
-            (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_transcurridos 
-            FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
-            listaFacturas
-        );
-        return rows;
-    } catch (e) { return []; } finally { if (connection) await connection.end(); }
-}
-
+// Ejecuta el envío con pausa de seguridad
 async function ejecutarEnvioMasivo(sock, deudores) {
+    console.log(`🚀 Iniciando envío a ${deudores.length} clientes...`);
     for (const row of deudores) {
         try {
             let num = row.celular.toString().replace(/\D/g, '');
@@ -80,12 +72,13 @@ async function ejecutarEnvioMasivo(sock, deudores) {
             const jid = `${num}@s.whatsapp.net`;
             const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
 
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nEsta factura tiene ${row.dias_transcurridos} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe informamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nEsta factura tiene ${row.dias_transcurridos} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
 
             await sock.sendMessage(jid, { text: texto });
+            console.log(`✅ Enviado: ${row.nombres}`);
             await new Promise(resolve => setTimeout(resolve, 20000));
-        } catch (e) { console.error("Error envío:", e.message); }
+        } catch (e) { console.error(`❌ Error con ${row.nombres}:`, e.message); }
     }
 }
 
-module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas, obtenerDetalleFacturas };
+module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas };
