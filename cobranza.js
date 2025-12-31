@@ -18,7 +18,7 @@ async function obtenerListaDeudores() {
             WHERE pagada = 'NO' 
             AND id_cliente <> 334 
             AND anulado <> 'si'
-            AND DATEDIFF(CURDATE(), fecha_reg) > 300
+            AND DATEDIFF(CURDATE(), fecha_reg) >45
             ORDER BY fecha_reg ASC
         `;
         const [rows] = await connection.execute(query);
