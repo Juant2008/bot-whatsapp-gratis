@@ -8,47 +8,42 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-async function obtenerZonas() {
+// Trae todos los deudores de más de 300 días
+async function obtenerListaDeudores() {
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
-        const [rows] = await connection.execute('SELECT DISTINCT zona FROM tab_zonas ORDER BY zona ASC');
-        return rows;
-    } catch (e) { return []; } finally { if (connection) await connection.end(); }
-}
-
-async function obtenerListaDeudores(zonaFiltro = '') {
-    let connection;
-    try {
-        connection = await mysql.createConnection(dbConfig);
-        let sql = `
-            SELECT celular, nombres, nro_factura, total, abono_factura, 
-            (total - abono_factura) AS saldo_pendiente, fecha_reg, zona,
+        const [rows] = await connection.execute(
+            `SELECT celular, nombres, nro_factura, total, abono_factura, 
+            (total - abono_factura) AS saldo_pendiente, fecha_reg,
             DATEDIFF(CURDATE(), fecha_reg) AS dias_mora
             FROM tab_facturas 
             WHERE pagada = 'NO' AND anulado <> 'si' AND id_cliente <> 334
-            AND (total - abono_factura) > 0
+            AND (total - abono_factura) > 0 
             AND DATEDIFF(CURDATE(), fecha_reg) > 300
-        `;
-        const params = [];
-        if (zonaFiltro) { sql += ` AND zona = ?`; params.push(zonaFiltro); }
-        sql += ` ORDER BY fecha_reg ASC`;
-        const [rows] = await connection.execute(sql, params);
+            ORDER BY fecha_reg ASC`
+        );
         return rows;
-    } catch (error) { return []; } finally { if (connection) await connection.end(); }
+    } catch (error) {
+        console.error("❌ Error DB:", error.message);
+        return [];
+    } finally {
+        if (connection) await connection.end();
+    }
 }
 
-// NUEVA FUNCIÓN: Busca en la DB solo las facturas seleccionadas
-async function obtenerFacturasPorId(listaFacturas) {
+// Busca los datos de las facturas que marcaste en el iPhone
+async function obtenerDetalleFacturas(listaFacturas) {
     if (!listaFacturas || listaFacturas.length === 0) return [];
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
-        const placeholders = listaFacturas.map(() => '?').join(',');
+        const formatIds = Array.isArray(listaFacturas) ? listaFacturas : [listaFacturas];
+        const placeholders = formatIds.map(() => '?').join(',');
         const [rows] = await connection.query(
-            `SELECT celular, nombres, nro_factura, (total - abono_factura) AS saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) AS dias_mora 
+            `SELECT celular, nombres, nro_factura, (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_mora 
              FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
-            listaFacturas
+            formatIds
         );
         return rows;
     } catch (e) { return []; } finally { if (connection) await connection.end(); }
@@ -62,13 +57,13 @@ async function ejecutarEnvioMasivo(sock, deudores) {
             const jid = `${num}@s.whatsapp.net`;
             const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
             
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* tiene un *SALDO PENDIENTE de $${saldo}*.\n\nEsta deuda tiene ${row.dias_mora} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nEsta factura tiene ${row.dias_mora} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
 
             await sock.sendMessage(jid, { text: texto });
             console.log(`✅ Enviado a: ${row.nombres}`);
-            await new Promise(r => setTimeout(r, 15000));
+            await new Promise(r => setTimeout(r, 20000));
         } catch (e) { console.error(`❌ Error en ${row.nombres}`); }
     }
 }
 
-module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerZonas, obtenerFacturasPorId };
+module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerDetalleFacturas };
