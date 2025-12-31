@@ -5,12 +5,12 @@ const qrcode = require('qrcode');
 const http = require('http');
 const pino = require('pino');
 const url = require('url');
-const { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerZonas } = require('./cobranza');
+const { obtenerListaDeudores, ejecutarEnvioMasivo } = require('./cobranza');
 
 const mongoURI = "mongodb+srv://one4cars:v6228688@one4cars.fpwdlwe.mongodb.net/?retryWrites=true&w=majority";
 let qrCodeData = "";
 global.sockBot = null;
-let deudoresEnMemoria = []; 
+let deudoresEnMemoria = []; // Para evitar que se pierda la selección
 
 mongoose.connect(mongoURI).then(() => console.log("✅ MongoDB OK")).catch(err => console.log("❌ Error MongoDB"));
 
@@ -20,7 +20,7 @@ async function startBot() {
     const sock = makeWASocket({
         version, auth: state, printQRInTerminal: false, logger: pino({ level: 'error' }),
         browser: ["ONE4CARS Bot", "Chrome", "1.0.0"], syncFullHistory: false,
-        shouldIgnoreJid: jid => jid.includes('broadcast') || jid.includes('@g.us'), 
+        shouldIgnoreJid: jid => jid.includes('broadcast') || jid.includes('@g.us'),
         connectTimeoutMs: 60000
     });
     global.sockBot = sock;
@@ -39,15 +39,17 @@ async function startBot() {
         if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@g.us')) return;
         const from = msg.key.remoteJid;
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
-        const saludo = 'Saludos estimado, toque el enlace para ';
+        const saludoEnlace = 'Saludos estimado, toque el siguiente enlace para ';
 
-        if (body.includes('medios de pago')) await sock.sendMessage(from, { text: `${saludo} consultar:\n\n👉 *MEDIOS DE PAGO*\nhttps://www.one4cars.com/medios_de_pago.php` });
-        else if (body.includes('estado de cuenta')) await sock.sendMessage(from, { text: `${saludo} obtener su:\n\n👉 *ESTADO DE CUENTA*\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php` });
-        else if (body.includes('lista de precios')) await sock.sendMessage(from, { text: `${saludo} ver nuestra:\n\n👉 *LISTA DE PRECIOS*\nhttps://www.one4cars.com/lista_de_precios.php` });
+        if (body.includes('medios de pago')) await sock.sendMessage(from, { text: `${saludoEnlace} consultar:\n\n👉 *MEDIOS DE PAGO*\nhttps://www.one4cars.com/medios_de_pago.php` });
+        else if (body.includes('estado de cuenta')) await sock.sendMessage(from, { text: `${saludoEnlace} obtener su:\n\n👉 *ESTADO DE CUENTA*\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php` });
+        else if (body.includes('lista de precios')) await sock.sendMessage(from, { text: `${saludoEnlace} ver nuestra:\n\n👉 *LISTA DE PRECIOS*\nhttps://www.one4cars.com/lista_de_precios.php` });
+        else if (body.includes('afiliar cliente')) await sock.sendMessage(from, { text: `${saludoEnlace} realizar la:\n\n👉 *AFILIAR CLIENTE*\nhttps://www.one4cars.com/afiliacion_cliente.php` });
+        else if (body.includes('asesor')) await sock.sendMessage(from, { text: 'Saludos estimado, un asesor se comunicará con usted en breve.' });
         else {
-            const saludos = ['hola', 'buendia', 'buen dia', 'buenos dias', 'buenas tardes'];
+            const saludos = ['hola', 'buendia', 'buen dia', 'buenos dias', 'buenas tardes', 'saludos'];
             if (saludos.some(s => body.includes(s))) {
-                await sock.sendMessage(from, { text: 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\nEscribe la frase de la opción que necesitas:\n\n📲 *Menú de Gestión Comercial*\n🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Mis Clientes*\n📝 *Afiliar Cliente*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*' });
+                await sock.sendMessage(from, { text: 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\nEscribe la frase de la opción que necesitas:\n\n🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Mis Clientes*\n📝 *Afiliar Cliente*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*' });
             }
         }
     });
@@ -59,80 +61,77 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
     if (parsedUrl.pathname === '/cobrar-ahora') {
-        const zonaSeleccionada = parsedUrl.query.zona || '';
-        const listaZonas = await obtenerZonas();
-        deudoresEnMemoria = await obtenerListaDeudores(zonaSeleccionada);
-        
-        let selectZonas = listaZonas.map(z => `<option value="${z.zona}" ${zonaSeleccionada === z.zona ? 'selected' : ''}>${z.zona}</option>`).join('');
-
-        let cards = deudoresEnMemoria.map(d => `
+        deudoresEnMemoria = await obtenerListaDeudores();
+        let cards = deudoresEnMemoria.map((d, i) => `
             <label class="card">
                 <input type="checkbox" name="facturas" value="${d.nro_factura}" checked class="user-check">
-                <div class="card-body">
+                <div class="card-info">
                     <div class="c-name">${d.nombres}</div>
-                    <div class="c-sub">Fac: ${d.nro_factura} • ${d.zona}</div>
+                    <div class="c-sub">Fac: ${d.nro_factura} • ${d.dias_mora} días mora</div>
                 </div>
-                <div class="c-price">
-                    <div class="val">$${parseFloat(d.saldo_pendiente).toFixed(2)}</div>
-                    <div class="days">${d.dias_transcurridos} d&iacute;as</div>
-                </div>
+                <div class="c-price"><div class="val">$${parseFloat(d.saldo_pendiente).toFixed(2)}</div></div>
             </label>`).join('');
 
-        res.write(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+        res.write(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body { font-family: -apple-system, sans-serif; background: #f2f2f7; margin: 0; padding-bottom: 120px; }
-            .nav { background: #007aff; color: white; padding: 15px; text-align: center; font-weight: bold; position: sticky; top: 0; z-index: 20; }
-            .filter-bar { background: white; padding: 10px; border-bottom: 1px solid #ddd; display: flex; gap: 10px; align-items: center; position: sticky; top: 50px; z-index: 15; }
-            select { flex-grow: 1; padding: 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; background: #f8f8f8; }
-            .btn-f { background: #007aff; color: white; border: none; padding: 10px 15px; border-radius: 8px; font-weight: bold; }
+            .nav { background: #007aff; color: white; padding: 15px; text-align: center; font-weight: bold; position: sticky; top: 0; }
             .card { background: white; border-radius: 15px; padding: 15px; margin: 10px; display: flex; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-            .card-body { flex-grow: 1; padding-left: 10px; overflow: hidden; }
+            .card-info { flex-grow: 1; padding-left: 10px; overflow: hidden; }
             .c-name { font-weight: bold; font-size: 14px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .c-sub { font-size: 11px; color: #8e8e93; }
-            .c-price { text-align: right; min-width: 90px; }
             .val { font-weight: 800; color: #ff3b30; font-size: 16px; }
-            .days { font-size: 11px; color: #ff9500; font-weight: bold; }
-            .footer { position: fixed; bottom: 0; width: 100%; background: rgba(255,255,255,0.9); padding: 15px; border-top: 1px solid #ddd; backdrop-filter: blur(10px); box-sizing: border-box; z-index: 30; }
+            .footer { position: fixed; bottom: 0; width: 100%; background: rgba(255,255,255,0.9); padding: 15px; border-top: 1px solid #ddd; backdrop-filter: blur(10px); box-sizing: border-box; }
             .btn-s { background: #34c759; color: white; border: none; padding: 16px; border-radius: 12px; font-weight: bold; width: 100%; font-size: 16px; }
-            input[type="checkbox"] { width: 22px; height: 22px; accent-color: #007aff; }
+            input[type="checkbox"] { width: 22px; height: 22px; }
         </style>
-        </head><body>
+        <script>
+            function toggleAll(source) {
+                const checkboxes = document.querySelectorAll('.user-check');
+                checkboxes.forEach(c => c.checked = source.checked);
+            }
+        </script></head><body>
         <div class="nav">Cobranza ONE4CARS</div>
-        <form action="/cobrar-ahora" method="GET" class="filter-bar">
-            <select name="zona"><option value="">Todas las Zonas</option>${selectZonas}</select>
-            <button type="submit" class="btn-f">Filtrar</button>
-        </form>
         <form action="/confirmar-envio" method="GET">
-            <div style="padding: 10px; display: flex; justify-content: space-between; font-size: 12px; color: #666;">
+            <div style="padding: 15px; display: flex; justify-content: space-between; font-size: 13px;">
                 <span>Total: ${deudoresEnMemoria.length} facturas</span>
-                <label><input type="checkbox" checked onclick="const c=document.querySelectorAll('.user-check');c.forEach(x=>x.checked=this.checked)"> Todos</label>
+                <label><input type="checkbox" checked onclick="toggleAll(this)"> Seleccionar Todos</label>
             </div>
-            ${cards || '<p style="text-align:center; padding:20px;">No hay deudas en esta zona.</p>'}
-            ${cards ? '<div class="footer"><button type="submit" class="btn-s">🚀 ENVIAR SELECCIONADOS</button></div>' : ''}
-        </form>
-        </body></html>`);
+            ${cards || '<p style="text-align:center; padding:20px;">No hay facturas pendientes.</p>'}
+            ${cards ? '<div class="footer"><button type="submit" class="btn-s">🚀 ENVIAR WHATSAPP</button></div>' : ''}
+        </form></body></html>`);
         res.end();
     } 
     else if (parsedUrl.pathname === '/confirmar-envio') {
         let fIds = parsedUrl.query.facturas;
         if (!fIds) return res.end("Nada seleccionado.");
         if (!Array.isArray(fIds)) fIds = [fIds];
-        const aEnviar = deudoresEnMemoria.filter(d => fIds.includes(d.nro_factura));
-        res.write('<html><body style="font-family:sans-serif; text-align:center; padding-top:50px;"><h1>🚀 Iniciando Envío</h1><p>Enviando a '+aEnviar.length+' clientes...</p><a href="/cobrar-ahora">Volver</a></body></html>');
+
+        const seleccionados = deudoresEnMemoria.filter(d => fIds.includes(d.nro_factura));
+        
+        res.write(`<html><body style="font-family:sans-serif; text-align:center; padding-top:50px; background:#f2f2f7;">
+            <div style="background:white; margin:20px; padding:30px; border-radius:20px; box-shadow:0 4px 10px rgba(0,0,0,0.1);">
+                <h1 style="color:#34c759;">🚀 Envío Iniciado</h1>
+                <p>Enviando a <b>${seleccionados.length}</b> clientes.</p>
+                <a href="/cobrar-ahora" style="color:#007aff; font-weight:bold; text-decoration:none;">← Volver</a>
+            </div></body></html>`);
         res.end();
-        if (global.sockBot) ejecutarEnvioMasivo(global.sockBot, aEnviar);
+
+        if (global.sockBot && seleccionados.length > 0) {
+            ejecutarEnvioMasivo(global.sockBot, seleccionados);
+        }
     } 
     else {
         if (qrCodeData.includes("data:image")) {
             res.write(`<center style="padding-top:100px;"><h1>Escanea el QR</h1><img src="${qrCodeData}" width="300"></center>`);
         } else {
-            res.write(`<center style="padding-top:100px;"><h1>✅ BOT ONLINE</h1><p><a href="/cobrar-ahora">Ir al Panel de Cobranza</a></p></center>`);
+            res.write(`<center style="padding-top:100px;"><h1>✅ BOT ONLINE</h1><p><a href="/cobrar-ahora">Entrar al Panel de Cobranza</a></p></center>`);
         }
         res.end();
     }
 });
 
 server.listen(port, '0.0.0.0', () => {
-    console.log(`✅ Servidor listo puerto ${port}`);
+    console.log(`✅ Servidor Dashboard OK puerto ${port}`);
     startBot();
 });
