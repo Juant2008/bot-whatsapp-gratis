@@ -5,31 +5,24 @@ const qrcode = require('qrcode');
 const http = require('http');
 const pino = require('pino');
 const url = require('url');
-const { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas } = require('./cobranza');
+const { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas, obtenerDetalleFacturas } = require('./cobranza');
 
 const mongoURI = "mongodb+srv://one4cars:v6228688@one4cars.fpwdlwe.mongodb.net/?retryWrites=true&w=majority";
 let qrCodeData = "";
 global.sockBot = null;
-let deudoresEnMemoria = []; 
 
-mongoose.connect(mongoURI).then(() => console.log("✅ Memoria MongoDB activa")).catch(err => console.error("❌ Error MongoDB:", err.message));
+mongoose.connect(mongoURI).then(() => console.log("✅ MongoDB OK")).catch(err => console.log("❌ Error MongoDB"));
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
-
     const sock = makeWASocket({
-        version, auth: state, printQRInTerminal: false,
-        logger: pino({ level: 'error' }),
-        browser: ["ONE4CARS Bot", "Chrome", "1.0.0"],
-        syncFullHistory: false,
-        shouldIgnoreJid: jid => jid.includes('broadcast') || jid.includes('@g.us'),
-        connectTimeoutMs: 60000
+        version, auth: state, printQRInTerminal: false, logger: pino({ level: 'error' }),
+        browser: ["ONE4CARS Bot", "Chrome", "1.0.0"], syncFullHistory: false,
+        shouldIgnoreJid: jid => jid.includes('broadcast') || jid.includes('@g.us'), connectTimeoutMs: 60000
     });
-
     global.sockBot = sock;
     sock.ev.on('creds.update', saveCreds);
-
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
@@ -42,7 +35,6 @@ async function startBot() {
         if (type !== 'notify') return;
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@g.us')) return;
-
         const from = msg.key.remoteJid;
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
         const saludoEnlace = 'Saludos estimado, toque el siguiente enlace para ';
@@ -70,95 +62,68 @@ const server = http.createServer(async (req, res) => {
     if (parsedUrl.pathname === '/cobrar-ahora') {
         const vendedores = await obtenerVendedores();
         const zonas = await obtenerZonas();
-        const filtros = {
-            id_vendedor: parsedUrl.query.id_vendedor || '',
-            id_zona: parsedUrl.query.id_zona || '',
-            dias: parsedUrl.query.dias || 30
-        };
+        const deudores = await obtenerListaDeudores(parsedUrl.query);
+        
+        const optVendedores = vendedores.map(v => `<option value="${v.id_vendedor}">${v.nombre}</option>`).join('');
+        const optZonas = zonas.map(z => `<option value="${z.id_zona}">${z.zona}</option>`).join('');
 
-        deudoresEnMemoria = await obtenerListaDeudores(filtros);
-        const optVendedores = vendedores.map(v => `<option value="${v.id_vendedor}" ${filtros.id_vendedor == v.id_vendedor ? 'selected' : ''}>${v.nombre}</option>`).join('');
-        const optZonas = zonas.map(z => `<option value="${z.id_zona}" ${filtros.id_zona == z.id_zona ? 'selected' : ''}>${z.zona}</option>`).join('');
-
-        let items = deudoresEnMemoria.map((d, i) => `
-            <div class="debt-card">
-                <div class="card-check"><input type="checkbox" name="c_${i}" value="${d.celular}" checked class="user-check"></div>
+        let items = deudores.map((d, i) => `
+            <label class="debt-card">
+                <input type="checkbox" name="facturas" value="${d.nro_factura}" checked class="user-check">
                 <div class="card-info">
                     <div class="client-name">${d.nombres}</div>
-                    <div class="factura-info">Fac: <b>${d.nro_factura}</b> • ${d.vendedor_nom || 'S/V'}</div>
-                    <div class="zona-tag">📍 ${d.zona_nom || 'Sin Zona'}</div>
+                    <div class="factura-info">Fac: ${d.nro_factura} • ${d.vendedor_nom || ''}</div>
                 </div>
                 <div class="card-amount-box">
-                    <div class="card-amount">$${parseFloat(d.total).toFixed(2)}</div>
+                    <div class="card-amount">$${parseFloat(d.saldo_pendiente).toFixed(2)}</div>
                     <div class="card-days">${d.dias_transcurridos} días</div>
                 </div>
-            </div>`).join('');
+            </label>`).join('');
 
         res.write(`
-        <!DOCTYPE html><html><head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body { font-family: -apple-system, sans-serif; background: #f2f2f7; margin: 0; padding-bottom: 120px; }
+            body { font-family: -apple-system, sans-serif; background: #f2f2f7; margin: 0; padding-bottom: 100px; }
             .header { background: #007aff; color: white; padding: 15px; text-align: center; position: sticky; top: 0; z-index: 10; }
             .filter-box { background: white; padding: 15px; border-bottom: 1px solid #d1d1d6; }
-            select, input { width: 100%; padding: 12px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 10px; font-size: 14px; background: #f8f8f8; -webkit-appearance: none; }
+            select, input[type="number"] { width: 100%; padding: 12px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 10px; font-size: 14px; }
             .btn-filter { background: #007aff; color: white; border: none; padding: 12px; border-radius: 10px; font-weight: bold; width: 100%; cursor: pointer; }
-            .container { padding: 10px; }
-            .debt-card { background: white; border-radius: 15px; padding: 15px; margin-bottom: 10px; display: flex; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-            .card-info { flex-grow: 1; overflow: hidden; padding-left: 10px; }
-            .client-name { font-weight: bold; font-size: 14px; text-transform: uppercase; color: #1c1c1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-            .factura-info { font-size: 11px; color: #8e8e93; margin-top: 2px; }
-            .zona-tag { font-size: 10px; color: #007aff; font-weight: bold; margin-top: 4px; }
-            .card-amount-box { text-align: right; min-width: 90px; }
+            .debt-card { background: white; border-radius: 15px; padding: 15px; margin: 10px; display: flex; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.1); cursor: pointer; }
+            .card-info { flex-grow: 1; padding-left: 12px; overflow: hidden; }
+            .client-name { font-weight: bold; font-size: 14px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .factura-info { font-size: 11px; color: #8e8e93; }
             .card-amount { font-weight: 800; color: #ff3b30; font-size: 16px; }
-            .card-days { font-size: 11px; background: #fff2e0; color: #ff9500; padding: 2px 5px; border-radius: 4px; display: inline-block; margin-top: 4px; }
+            .card-days { font-size: 11px; color: #ff9500; font-weight: bold; }
             .footer { position: fixed; bottom: 0; width: 100%; background: rgba(255,255,255,0.9); padding: 15px; border-top: 1px solid #ddd; backdrop-filter: blur(10px); box-sizing: border-box; }
-            .btn-send { background: #34c759; color: white; border: none; padding: 16px; border-radius: 12px; font-weight: bold; width: 100%; font-size: 16px; box-shadow: 0 4px 10px rgba(52,199,89,0.3); }
-            input[type="checkbox"] { width: 22px; height: 22px; accent-color: #007aff; }
-        </style>
-        <script>
-            function toggleAll(source) {
-                const checkboxes = document.getElementsByClassName('user-check');
-                for(let i=0; i<checkboxes.length; i++) checkboxes[i].checked = source.checked;
-            }
-        </script>
-        </head><body>
-        <div class="header"><h2 style="margin:0; font-size:18px;">Cobranza ONE4CARS 🚗</h2></div>
-        <div class="filter-box">
-            <form action="/cobrar-ahora" method="GET">
-                <select name="id_vendedor"><option value="">Todos los Vendedores</option>${optVendedores}</select>
-                <select name="id_zona"><option value="">Todas las Zonas</option>${optZonas}</select>
-                <input type="number" name="dias" placeholder="Mínimo días de mora" value="${filtros.dias}">
-                <button type="submit" class="btn-filter">🔍 Consultar Reporte</button>
-            </form>
-        </div>
-        <div class="container">
-            <form action="/confirmar-envio" method="GET">
-                <div style="display:flex; justify-content:space-between; padding: 10px; font-size: 12px; font-weight: bold; color: #666;">
-                    <span>${deudoresEnMemoria.length} FACTURAS</span>
-                    <label style="display:flex; align-items:center; gap:5px;"><input type="checkbox" checked onclick="toggleAll(this)"> TODOS</label>
-                </div>
-                ${items || '<p style="text-align:center; padding:20px; color:#999;">No hay resultados.</p>'}
-                ${deudoresEnMemoria.length > 0 ? '<div class="footer"><button type="submit" class="btn-send">🚀 ENVIAR WHATSAPP</button></div>' : ''}
-            </form>
-        </div>
+            .btn-send { background: #34c759; color: white; border: none; padding: 16px; border-radius: 12px; font-weight: bold; width: 100%; font-size: 16px; }
+            input[type="checkbox"] { width: 22px; height: 22px; }
+        </style></head><body>
+        <div class="header"><h2>Cobranza ONE4CARS</h2></div>
+        <form action="/cobrar-ahora" method="GET" class="filter-box">
+            <select name="id_vendedor"><option value="">Todos los Vendedores</option>${optVendedores}</select>
+            <select name="id_zona"><option value="">Todas las Zonas</option>${optZonas}</select>
+            <input type="number" name="dias" placeholder="Mínimo días" value="${parsedUrl.query.dias || 30}">
+            <button type="submit" class="btn-filter">Generar Reporte</button>
+        </form>
+        <form action="/confirmar-envio" method="GET">
+            ${items || '<p style="text-align:center; padding:20px;">No hay resultados.</p>'}
+            ${items ? '<div class="footer"><button type="submit" class="btn-send">ENVIAR WHATSAPP SELECCIONADOS</button></div>' : ''}
+        </form>
         </body></html>`);
         res.end();
     } 
     else if (parsedUrl.pathname === '/confirmar-envio') {
-        const query = parsedUrl.query;
-        const seleccionados = Object.values(query);
-        const aEnviar = deudoresEnMemoria.filter(d => seleccionados.includes(d.celular));
-        res.write('<html><body style="font-family:sans-serif; text-align:center; padding-top:50px;"><h1>🚀 Envío Iniciado</h1><p>Enviando a '+aEnviar.length+' clientes.</p><a href="/cobrar-ahora">Volver</a></body></html>');
+        const facturasAEnviar = Array.isArray(parsedUrl.query.facturas) ? parsedUrl.query.facturas : [parsedUrl.query.facturas];
+        res.write('<html><body style="font-family:sans-serif; text-align:center; padding-top:50px;"><h1>🚀 Iniciando Envío</h1><p>Consultando datos de las '+facturasAEnviar.length+' facturas marcadas...</p></body></html>');
         res.end();
-        if (global.sockBot && aEnviar.length > 0) ejecutarEnvioMasivo(global.sockBot, aEnviar);
+        if (global.sockBot) {
+            obtenerDetalleFacturas(facturasAEnviar).then(deudores => {
+                ejecutarEnvioMasivo(global.sockBot, deudores);
+            });
+        }
     } 
     else {
-        if (qrCodeData.includes("data:image")) {
-            res.write(`<center style="padding-top:50px;"><h1>🚗 ESCANEA EL QR</h1><img src="${qrCodeData}" width="300"></center>`);
-        } else {
-            res.write(`<center style="padding-top:100px;"><h1>✅ BOT ONLINE</h1><p><a href="/cobrar-ahora">Ir al Panel de Cobranza</a></p></center>`);
-        }
+        res.write(`<center style="padding-top:100px;">${qrCodeData.includes("data:image") ? `<h1>Escanea el QR</h1><img src="${qrCodeData}" width="300">` : `<h1>✅ BOT ONLINE</h1><a href="/cobrar-ahora">Ir al Panel de Cobranza</a>`}</center>`);
         res.end();
     }
 });
