@@ -1,4 +1,4 @@
-// const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const mongoose = require('mongoose');
 const qrcode = require('qrcode');
@@ -16,12 +16,13 @@ let qrCodeData = "";
 global.sockBot = null;
 let deudoresEnMemoria = []; 
 
-// Conexión a MongoDB para la persistencia de la sesión
+// Conexión a MongoDB para persistencia
 mongoose.connect(mongoURI)
-    .then(() => console.log("✅ Memoria permanente MongoDB conectada"))
+    .then(() => console.log("✅ Memoria MongoDB activa"))
     .catch(err => console.error("❌ Error MongoDB:", err.message));
 
 async function startBot() {
+    // AQUÍ ESTÁ LA CORRECCIÓN: useMultiFileAuthState ahora está definido arriba
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
@@ -31,8 +32,8 @@ async function startBot() {
         printQRInTerminal: false,
         logger: pino({ level: 'error' }),
         browser: ["ONE4CARS Bot", "Chrome", "1.0.0"],
-        syncFullHistory: false, // No descarga chats viejos para ahorrar RAM
-        shouldIgnoreJid: jid => jid.includes('broadcast') || jid.includes('@g.us'), // Ignora estados y grupos
+        syncFullHistory: false,
+        shouldIgnoreJid: jid => jid.includes('broadcast') || jid.includes('@g.us'),
         connectTimeoutMs: 60000
     });
 
@@ -41,27 +42,16 @@ async function startBot() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
-        if (qr) {
-            qrcode.toDataURL(qr, (err, url) => { 
-                qrCodeData = url; 
-                console.log("✅ Nuevo QR generado.");
-            });
-        }
-
+        if (qr) qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
-            if (statusCode !== DisconnectReason.loggedOut) {
-                console.log("🔄 Conexión perdida, reintentando...");
-                setTimeout(() => startBot(), 5000);
-            }
+            if (statusCode !== DisconnectReason.loggedOut) setTimeout(() => startBot(), 5000);
         } else if (connection === 'open') {
             qrCodeData = "BOT ONLINE ✅";
             console.log('🚀 ONE4CARS EN LÍNEA');
         }
     });
 
-    // --- LÓGICA DE MENSAJES ---
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
@@ -71,7 +61,7 @@ async function startBot() {
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
         const saludoEnlace = 'Saludos estimado, toque el siguiente enlace para ';
 
-        // 1. RESPUESTAS POR BOTONES / PALABRAS CLAVE
+        // --- LÓGICA DE BOTONES ---
         if (body.includes('medios de pago') || body.includes('numero de cuenta')) {
             await sock.sendMessage(from, { text: `${saludoEnlace} consultar:\n\n👉 *MEDIOS DE PAGO*\nhttps://www.one4cars.com/medios_de_pago.php` });
         }
@@ -102,18 +92,16 @@ async function startBot() {
         else if (body.includes('asesor')) {
             await sock.sendMessage(from, { text: 'Saludos estimado, en un momento un asesor se comunicará con usted de forma manual.' });
         }
-        // 2. MENÚ PRINCIPAL
         else {
             const saludos = ['hola', 'buendia', 'buen dia', 'buenos dias', 'buenas tardes', 'saludos'];
             if (saludos.some(s => body.includes(s))) {
-                const menu = 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\nEscribe la frase de la opción que necesitas:\n\n📲 *Menú de Gestión Comercial*\n\n🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Mis Clientes*\n📝 *Afiliar Cliente*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*';
-                await sock.sendMessage(from, { text: menu });
+                await sock.sendMessage(from, { text: 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\nEscribe la frase de la opción que necesitas:\n\n📲 *Menú de Gestión Comercial*\n\n🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Mis Clientes*\n📝 *Afiliar Cliente*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*' });
             }
         }
     });
 }
 
-// --- SERVIDOR DASHBOARD PROFESIONAL ---
+// --- SERVIDOR WEB DASHBOARD (IOS OPTIMIZED) ---
 const port = process.env.PORT || 10000;
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
@@ -122,11 +110,10 @@ const server = http.createServer(async (req, res) => {
     if (parsedUrl.pathname === '/cobrar-ahora') {
         const vendedores = await obtenerVendedores();
         const zonas = await obtenerZonas();
-        
         const filtros = {
             id_vendedor: parsedUrl.query.id_vendedor || '',
             id_zona: parsedUrl.query.id_zona || '',
-            dias: parsedUrl.query.dias || 300
+            dias: parsedUrl.query.dias || 30
         };
 
         deudoresEnMemoria = await obtenerListaDeudores(filtros);
@@ -152,7 +139,7 @@ const server = http.createServer(async (req, res) => {
         <!DOCTYPE html><html><head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <style>
-            body { font-family: -apple-system, sans-serif; background: #f2f2f7; margin: 0; padding-bottom: 100px; }
+            body { font-family: -apple-system, sans-serif; background: #f2f2f7; margin: 0; padding-bottom: 120px; }
             .header { background: #007aff; color: white; padding: 15px; text-align: center; position: sticky; top: 0; z-index: 10; }
             .filter-box { background: white; padding: 15px; border-bottom: 1px solid #d1d1d6; }
             select, input { width: 100%; padding: 12px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 10px; font-size: 14px; background: #f8f8f8; -webkit-appearance: none; }
@@ -182,18 +169,18 @@ const server = http.createServer(async (req, res) => {
             <form action="/cobrar-ahora" method="GET">
                 <select name="id_vendedor"><option value="">Todos los Vendedores</option>${optVendedores}</select>
                 <select name="id_zona"><option value="">Todas las Zonas</option>${optZonas}</select>
-                <input type="number" name="dias" placeholder="Mínimo de días vencidos" value="${filtros.dias}">
-                <button type="submit" class="btn-filter">🔍 Generar Reporte</button>
+                <input type="number" name="dias" placeholder="Mínimo días de mora" value="${filtros.dias}">
+                <button type="submit" class="btn-filter">🔍 Consultar Reporte</button>
             </form>
         </div>
         <div class="container">
             <form action="/confirmar-envio" method="GET">
                 <div style="display:flex; justify-content:space-between; padding: 10px; font-size: 12px; font-weight: bold; color: #666;">
-                    <span>${deudoresEnMemoria.length} FACTURAS</span>
+                    <span>${deudoresEnMemoria.length} ENCONTRADOS</span>
                     <label style="display:flex; align-items:center; gap:5px;"><input type="checkbox" checked onclick="toggleAll(this)"> TODOS</label>
                 </div>
-                ${items || '<p style="text-align:center; padding:20px; color:#999;">No hay resultados.</p>'}
-                ${deudoresEnMemoria.length > 0 ? '<div class="footer"><button type="submit" class="btn-send">🚀 ENVIAR WHATSAPP</button></div>' : ''}
+                ${items || '<p style="text-align:center; padding:20px; color:#999;">No hay facturas con estos filtros.</p>'}
+                ${deudoresEnMemoria.length > 0 ? '<div class="footer"><button type="submit" class="btn-send">🚀 ENVIAR RECORDATORIOS</button></div>' : ''}
             </form>
         </div>
         </body></html>`);
