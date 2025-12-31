@@ -1,110 +1,131 @@
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
+const mongoose = require('mongoose');
 const qrcode = require('qrcode');
 const http = require('http');
 const pino = require('pino');
-const { ejecutarCobranza } = require('./cobranza');
+const url = require('url');
 const { obtenerListaDeudores, ejecutarEnvioMasivo } = require('./cobranza');
 
 const mongoURI = "mongodb+srv://one4cars:v6228688@one4cars.fpwdlwe.mongodb.net/?retryWrites=true&w=majority";
 let qrCodeData = "";
 global.sockBot = null;
-let deudoresPendientes = []; // Memoria temporal para la confirmación
+let deudoresEnMemoria = []; 
 
-mongoose.connect(mongoURI).then(() => console.log("✅ MongoDB Conectado")).catch(err => console.log("❌ Error MongoDB"));
+mongoose.connect(mongoURI).then(() => console.log("✅ MongoDB OK")).catch(err => console.log("❌ Error MongoDB"));
 
-@@ -37,7 +38,6 @@ async function startBot() {
-            if (statusCode !== DisconnectReason.loggedOut) setTimeout(() => startBot(), 5000);
-        } else if (connection === 'open') {
-            qrCodeData = "BOT ONLINE ✅";
-            console.log('🚀 ONE4CARS EN LÍNEA');
+async function startBot() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const { version } = await fetchLatestBaileysVersion();
+    const sock = makeWASocket({
+        version, auth: state, printQRInTerminal: false, logger: pino({ level: 'error' }),
+        browser: ["ONE4CARS Bot", "Chrome", "1.0.0"], syncFullHistory: false,
+        shouldIgnoreJid: jid => jid.includes('broadcast') || jid.includes('@g.us'), 
+        connectTimeoutMs: 60000
+    });
+    global.sockBot = sock;
+    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('connection.update', (u) => {
+        if (u.qr) qrcode.toDataURL(u.qr, (err, url) => { qrCodeData = url; });
+        if (u.connection === 'open') qrCodeData = "BOT ONLINE ✅";
+        if (u.connection === 'close') {
+            if ((u.lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut) setTimeout(startBot, 5000);
         }
     });
 
-@@ -50,9 +50,7 @@ async function startBot() {
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@g.us')) return;
+        const from = msg.key.remoteJid;
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
-        const saludoFormal = 'Saludos estimado, ingrese al siguiente link para ';
+        const saludo = 'Saludos estimado, toque el enlace para ';
 
-        // --- LÓGICA DE RESPUESTAS (RESTABLECIDA SEGÚN TU ÚLTIMA VERSIÓN) ---
-        
-        if (body.includes('medios de pago') || body.includes('numero de cuenta') || body.includes('numeros de cuenta')) {
-        if (body.includes('medios de pago')) {
-            await sock.sendMessage(from, { text: saludoFormal + 'obtener nuestras formas de pago:\n\nhttps://www.one4cars.com/medios_de_pago.php/' });
-        }
-        else if (body.includes('estado de cuenta')) {
-@@ -82,36 +80,64 @@ async function startBot() {
-        else if (body.includes('asesor')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado, en un momento un asesor se comunicará con usted de forma manual.' });
-        }
-        // --- MENÚ PRINCIPAL ---
+        if (body.includes('medios de pago')) await sock.sendMessage(from, { text: `${saludo} consultar:\n\n👉 *MEDIOS DE PAGO*\nhttps://www.one4cars.com/medios_de_pago.php` });
+        else if (body.includes('estado de cuenta')) await sock.sendMessage(from, { text: `${saludo} obtener su:\n\n👉 *ESTADO DE CUENTA*\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php` });
+        else if (body.includes('lista de precios')) await sock.sendMessage(from, { text: `${saludo} ver nuestra:\n\n👉 *LISTA DE PRECIOS*\nhttps://www.one4cars.com/lista_de_precios.php` });
+        else if (body.includes('afiliar cliente')) await sock.sendMessage(from, { text: `${saludo} realizar la:\n\n👉 *AFILIAR CLIENTE*\nhttps://www.one4cars.com/afiliacion_cliente.php` });
+        else if (body.includes('asesor')) await sock.sendMessage(from, { text: 'Saludos estimado, un asesor se comunicará con usted en breve.' });
         else {
-            const saludos = ['hola', 'buendia', 'buen dia', 'buenos dias', 'buenas tardes', 'saludos'];
-            if (saludos.some(s => body === s || body.includes(s)) && !body.includes('http')) {
+            const saludos = ['hola', 'buendia', 'buen dia', 'buenos dias', 'buenas tardes'];
             if (saludos.some(s => body.includes(s))) {
-                const menu = 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\nEscribe la frase de la opción que necesitas:\n\n📲 *Menú de Gestión Comercial*\n🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Mis Clientes*\n👥 *Afiliar Clientes*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*';
-                await sock.sendMessage(from, { text: menu });
+                await sock.sendMessage(from, { text: 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\nEscribe la frase de la opción que necesitas:\n\n📲 *Menú de Gestión Comercial*\n🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Mis Clientes*\n📝 *Afiliar Cliente*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*' });
             }
         }
     });
 }
 
-// --- SERVIDOR WEB PROFESIONAL ---
 const port = process.env.PORT || 10000;
 const server = http.createServer(async (req, res) => {
-http.createServer(async (req, res) => {
+    const parsedUrl = url.parse(req.url, true);
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    
-    // RUTA 1: Vista Previa de Deudores
-    if (req.url === '/cobrar-ahora') {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.write('<h1>🚀 Ejecutando cobranza masiva...</h1>');
-        deudoresPendientes = await obtenerListaDeudores();
-        let tabla = deudoresPendientes.map(d => `<tr><td>${d.nombres}</td><td>${d.nro_factura}</td><td>${d.total}</td><td>${d.celular}</td></tr>`).join('');
-        
-        res.write(`
-            <html><head><style>
-                body { font-family: Arial; background: #f4f4f4; text-align: center; }
-                table { width: 90%; margin: 20px auto; border-collapse: collapse; background: white; }
-                th, td { border: 1px solid #ddd; padding: 12px; }
-                th { background: #2c3e50; color: white; }
-                .btn { background: #27ae60; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; }
-            </style></head><body>
-                <h1>📋 Lista de Cobranza (>30 días)</h1>
-                <p>Se encontraron <b>${deudoresPendientes.length}</b> facturas pendientes.</p>
-                <table>
-                    <tr><th>Cliente</th><th>Factura</th><th>Monto</th><th>WhatsApp</th></tr>
-                    ${tabla}
-                </table>
-                <br>
-                ${deudoresPendientes.length > 0 ? `<a href="/confirmar-envio" class="btn">🚀 CONFIRMAR Y ENVIAR MENSAJES</a>` : '<b>No hay deudas vencidas.</b>'}
-            </body></html>
-        `);
+
+    if (parsedUrl.pathname === '/cobrar-ahora') {
+        deudoresEnMemoria = await obtenerListaDeudores();
+        let cards = deudoresEnMemoria.map(d => `
+            <label class="card">
+                <input type="checkbox" name="facturas" value="${d.nro_factura}" checked class="user-check">
+                <div class="card-info">
+                    <div class="c-name">${d.nombres}</div>
+                    <div class="c-sub">Fac: ${d.nro_factura}</div>
+                </div>
+                <div class="c-price">
+                    <div class="val">$${parseFloat(d.saldo_pendiente).toFixed(2)}</div>
+                </div>
+            </label>`).join('');
+
+        res.write(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: sans-serif; background: #f2f2f7; margin: 0; padding-bottom: 100px; }
+            .nav { background: #007aff; color: white; padding: 15px; text-align: center; font-weight: bold; position: sticky; top: 0; }
+            .card { background: white; border-radius: 15px; padding: 15px; margin: 10px; display: flex; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+            .card-info { flex-grow: 1; padding-left: 10px; overflow: hidden; }
+            .c-name { font-weight: bold; font-size: 14px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            .c-sub { font-size: 11px; color: #8e8e93; }
+            .c-price { text-align: right; min-width: 80px; }
+            .val { font-weight: 800; color: #ff3b30; font-size: 16px; }
+            .footer { position: fixed; bottom: 0; width: 100%; background: white; padding: 15px; border-top: 1px solid #ddd; box-sizing: border-box; }
+            .btn-s { background: #34c759; color: white; border: none; padding: 16px; border-radius: 12px; font-weight: bold; width: 100%; font-size: 16px; }
+            input[type="checkbox"] { width: 22px; height: 22px; }
+        </style>
+        <script>
+            function toggleAll(source) {
+                const checkboxes = document.querySelectorAll('.user-check');
+                checkboxes.forEach(c => c.checked = source.checked);
+            }
+        </script></head><body>
+        <div class="nav">Cobranza ONE4CARS</div>
+        <form action="/confirmar-envio" method="GET">
+            <div style="padding: 10px; display: flex; justify-content: space-between; font-size: 12px;">
+                <span>Total: ${deudoresEnMemoria.length}</span>
+                <label><input type="checkbox" checked onclick="toggleAll(this)"> Todos</label>
+            </div>
+            ${cards || '<p style="text-align:center; padding:20px;">No hay facturas.</p>'}
+            ${cards ? '<div class="footer"><button type="submit" class="btn-s">🚀 ENVIAR WHATSAPP</button></div>' : ''}
+        </form>
+        </body></html>`);
         res.end();
     } 
-    // RUTA 2: Ejecución tras confirmación
-    else if (req.url === '/confirmar-envio') {
-        res.write('<h1>🚀 Envío en progreso...</h1><p>El bot está enviando los mensajes cada 30 segundos para evitar bloqueos. Puedes cerrar esta ventana.</p>');
+    else if (parsedUrl.pathname === '/confirmar-envio') {
+        let fIds = parsedUrl.query.facturas;
+        if (!fIds) return res.end("Nada seleccionado.");
+        if (!Array.isArray(fIds)) fIds = [fIds];
+        const aEnviar = deudoresEnMemoria.filter(d => fIds.includes(d.nro_factura));
+        res.write('<html><body style="font-family:sans-serif; text-align:center; padding-top:50px;"><h1>🚀 Iniciando Envío</h1><p>Enviando a '+aEnviar.length+' clientes...</p><a href="/cobrar-ahora">Volver</a></body></html>');
         res.end();
-        if (global.sockBot) ejecutarCobranza(global.sockBot).catch(e => console.log(e));
-    } else {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        if (global.sockBot && deudoresPendientes.length > 0) {
-            ejecutarEnvioMasivo(global.sockBot, deudoresPendientes).then(() => deudoresPendientes = []);
-        }
+        if (global.sockBot) ejecutarEnvioMasivo(global.sockBot, aEnviar);
     } 
-    // RUTA 3: Home (QR)
     else {
         if (qrCodeData.includes("data:image")) {
-            res.write(`<center><h1>🚗 ESCANEA EL QR</h1><img src="${qrCodeData}" width="300"></center>`);
+            res.write(`<center style="padding-top:100px;"><h1>Escanea el QR</h1><img src="${qrCodeData}" width="300"></center>`);
         } else {
-            res.write(`<center><h1>✅ BOT ONLINE</h1><p>ONE4CARS Activo.</p></center>`);
-            res.write(`<center><h1>✅ BOT ONLINE</h1><p>Visita <a href="/cobrar-ahora">/cobrar-ahora</a> para ver deudores.</p></center>`);
+            res.write(`<center style="padding-top:100px;"><h1>✅ BOT ONLINE</h1><p><a href="/cobrar-ahora">Ir al Panel de Cobranza</a></p></center>`);
         }
         res.end();
     }
 });
 
 server.listen(port, '0.0.0.0', () => {
-    console.log(`Servidor activo puerto ${port}`);
-}).listen(port, '0.0.0.0', () => {
-    console.log("Servidor listo");
+    console.log(`✅ Servidor listo puerto ${port}`);
     startBot();
 });
