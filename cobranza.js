@@ -8,7 +8,6 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-// Obtener lista de vendedores para el selector
 async function obtenerVendedores() {
     let connection;
     try {
@@ -18,7 +17,6 @@ async function obtenerVendedores() {
     } catch (e) { return []; } finally { if (connection) await connection.end(); }
 }
 
-// Obtener lista de zonas para el selector
 async function obtenerZonas() {
     let connection;
     try {
@@ -33,11 +31,10 @@ async function obtenerListaDeudores(filtros = {}) {
     try {
         connection = await mysql.createConnection(dbConfig);
         
-        const minDias = filtros.dias || 30;
+        const minDias = filtros.dias || 30; // Si no pones días, busca desde 30
         const idVendedor = filtros.id_vendedor || '';
         const idZona = filtros.id_zona || '';
 
-        // Consulta uniendo tablas para mostrar nombres reales
         let sql = `
             SELECT f.celular, f.nombres, f.nro_factura, f.total, f.fecha_reg, 
                    v.nombre as vendedor_nom, z.zona as zona_nom,
@@ -65,9 +62,10 @@ async function obtenerListaDeudores(filtros = {}) {
         sql += ` ORDER BY dias_transcurridos DESC`;
 
         const [rows] = await connection.execute(sql, params);
+        console.log(`📊 Consulta ejecutada. Filtro días: ${minDias}. Encontrados: ${rows.length}`);
         return rows;
     } catch (error) {
-        console.error("❌ ERROR MYSQL:", error.message);
+        console.error("❌ ERROR EN CONSULTA COBRANZA:", error.message);
         return [];
     } finally {
         if (connection) await connection.end();
@@ -80,9 +78,8 @@ async function ejecutarEnvioMasivo(sock, deudoresSeleccionados) {
             let num = row.celular.toString().replace(/\D/g, '');
             if (!num.startsWith('58')) num = '58' + num;
             const jid = `${num}@s.whatsapp.net`;
-            const fechaValida = new Date(row.fecha_reg).toISOString().split('T')[0];
-
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe informamos que su factura *${row.nro_factura}* tiene *${row.dias_transcurridos} días* vencida (desde el ${fechaValida}).\n\nPor favor, gestione su pago a la brevedad.`;
+            
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un saldo pendiente de *${row.total}* con ${row.dias_transcurridos} días de vencimiento.\n\nPor favor, gestione su pago a la brevedad.`;
 
             await sock.sendMessage(jid, { text: texto });
             await new Promise(resolve => setTimeout(resolve, 20000));
