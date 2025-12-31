@@ -5,7 +5,7 @@ const dbConfig = {
     host: 'one4cars.com', // Sin https://
     user: 'juant200_one4car',
     password: 'Notieneclave1*',
-    database: 'venezon'
+    database: 'juant200_venezon'
 };
 
 // Función 1: Solo obtiene la lista para mostrarla en pantalla
@@ -16,8 +16,8 @@ async function obtenerListaDeudores() {
         const [rows] = await connection.execute(
             `SELECT celular, nombres, nro_factura, total, fecha_reg 
              FROM tab_facturas 
-             WHERE pagada = 'NO' 
-             AND DATEDIFF(CURDATE(), fecha_reg) > 30`
+             WHERE pagada = 'NO' and id_cliente <> 334 and anulado <> 'si'
+             AND DATEDIFF(CURDATE(), fecha_reg) > 300`
         );
         return rows;
     } catch (error) {
