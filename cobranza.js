@@ -1,112 +1,88 @@
 const mysql = require('mysql2/promise');
 
+async function ejecutarCobranza(sock) {
+    console.log("🚀 Iniciando proceso de cobranza masiva...");
+    
+// Configuración de conexión (Ajustada para MySQL)
 const dbConfig = {
-    host: 'one4cars.com',
+    host: 'one4cars.com', // Sin https://
     user: 'juant200_one4car',
     password: 'Notieneclave1*',
-    database: 'juant200_venezon',
-    connectTimeout: 30000 
+    database: 'venezon'
 };
 
+// Función 1: Solo obtiene la lista para mostrarla en pantalla
 async function obtenerListaDeudores() {
     let connection;
     try {
+        // --- CONFIGURACIÓN DE TU MYSQL ---
+        connection = await mysql.createConnection({
+            host: 'https://www.one4cars.com', 
+            user: 'juant200_one4car',
+            password: 'Notieneclave1*',
+            database: 'venezon'
+        });
+
+        // Consulta: Clientes con facturas pendientes de más de 30 días
         connection = await mysql.createConnection(dbConfig);
-        // Consulta directa a la tabla de facturas (sin JOINs para evitar errores)
         const [rows] = await connection.execute(
-            `SELECT celular, nombres, nro_factura, total, abono_factura, 
-            (total - abono_factura) as saldo_pendiente, fecha_reg,
-            DATEDIFF(CURDATE(), fecha_reg) as dias 
-            FROM tab_facturas 
-            WHERE pagada = 'NO' AND id_cliente <> 334 AND anulado <> 'si'
-            AND (total - abono_factura) > 0
-            AND DATEDIFF(CURDATE(), fecha_reg) > 30
-            ORDER BY fecha_reg ASC`
+            `SELECT telefono, nombres, nro_factura, total 
+            `SELECT celular, nombres, nro_factura, total, fecha_reg 
+             FROM tab_facturas 
+             WHERE pagada = 'NO' 
+             AND DATEDIFF(CURDATE(), fecha_emision) > 300`
+             AND DATEDIFF(CURDATE(), fecha_reg) > 30`
         );
         return rows;
     } catch (error) {
-        console.error("❌ Error DB:", error.message);
+        console.error("❌ Error obteniendo lista:", error);
         return [];
     } finally {
         if (connection) await connection.end();
     }
 }
 
-async function ejecutarEnvioMasivo(sock, deudores) {
-    console.log(`🚀 Iniciando tanda de mensajes para ${deudores.length} clientes...`);
-    for (constmedios_de_pago.php` });
-        else if (body.includes('estado de cuenta')) await sock.sendMessage(from, { text: `${saludoEnlace} obtener su:\n\n👉 *ESTADO DE CUENTA*\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php` });
-        else if (body.includes('lista de precios')) await sock.sendMessage(from, { text: `${saludoEnlace} ver nuestra:\n\n👉 *LISTA DE PRECIOS*\nhttps://www.one4cars.com/lista_de_precios.php` });
-        else if (body.includes('tomar pedido')) await sock.sendMessage(from, { text: `${saludoEnlace} realizar su:\n\n👉 *TOMAR PEDIDO*\nhttps://www.one4cars.com/tomar_pedido.php` });
-        else if (body.includes('afiliar cliente')) await sock.sendMessage(from, { text: `${saludoEnlace} realizar la:\n\n👉 *AFILIAR CLIENTE*\nhttps://www.one4cars.com/afiliacion_cliente.php` });
-        else if (body.includes('aprobar cliente')) await sock.sendMessage(from, { text: `${saludoEnlace} gestionar la:\n\n👉 *APROBACIÓN DE CLIENTE*\nhttps://www.one4cars.com/aprobadora_clientes.php` });
-        else if (body.includes('asesor')) await sock.sendMessage(from, { text: 'Saludos estimado, en un momento un asesor se comunicará con usted de forma manual.' });
-        else {
-            const saludos = ['hola', 'buendia', 'buen dia', 'buenos dias', 'buenas tardes', 'saludos'];
-            if (saludos.some(s => body.includes(s))) {
-                const menu = 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\nEscribe la frase de la opción que necesitas, saveCreds } = await useMultiFileAuthState('auth_info');
-    const { version } = await fetchLatestBaileysVersion();
-    const sock = makeWASocket({
-        version, auth: state, printQRInTerminal: false, logger: pino({ level: 'error' }),
-        browser: ["ONE4CARS Bot", "Chrome", "1.0.0"], syncFullHistory: false,
-        shouldIgnoreJid: jid => jid.includes('broadcast') || jid.includes('@g.us'), connectTimeoutMs: 60000
-    });
-    global.sockBot = sock;
-    sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', (u) => {
-        if (u.qr) qrcode.toDataURL(u.qr, (err, url) => { qrCodeData = url; });
-        if (u.connection === 'open') qrCodeData = "BOT ONLINE ✅";
-        if (u.connection === 'close') {
-            if ((u.lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut) setTimeout(startBot, 5000);
-        }
-    });
+        console.log(`📈 Se enviarán ${rows.length} recordatorios.`);
 
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@g.us')) return;
-        const from = msg.key.remoteJid;
-        const body = (msg. || jid.includes('@g.us'), connectTimeoutMs: 60000
-    });
-    global.sockBot = sock;
-    sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', (u) => {
-        if (u.qr) qrcode.toDataURL(u.qr, (err, url) => { qrCodeData = url; });
-        if (u.connection === 'open') qrCodeData = "BOT ONLINE ✅";
-        if (u.connection === 'close') {
-            if ((u.lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut) setTimeout(startBot, 5000);
-        }
-    });
-
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@g.us')) return;
-        const from = msg.key.remoteJid;
-        const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
-        const saludo = 'Saludos estimado, toque el siguiente enlace para ';
-
-        if (body.includes('medios de pago')) await sock.sendMessage(from, { text: `${saludo} consultar:\n\n👉 *MEDIOS DE PAGO*\nhttps://www.one4cars.com/medios_de_pago.php` });
-        else if (body.includes('estado de cuenta')) await sock.sendMessage(from, { text: `${saludo} obtener su:\n\n👉 *ESTADO DE CUENTA*\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php` });
-        else if (body.includes('lista de precios') || body.includes('listas de precios')) await sock.sendMessage(from, { text: `${saludo} ver nuestra:\n\n👉 *LISTA DE row of deudores) {
-        try {
-            // El celular ya trae el 58, solo quitamos cualquier caracter no numérico
-            let num = row.celular.toString().replace(/\D/g, '');
+        for (const row of rows) {
+            // Limpiamos el número: quitamos todo lo que no sea número
+            let num = row.telefono.replace(/\D/g, '');
+            if (!num.startsWith('58')) num = '58' + num;
             const jid = `${num}@s.whatsapp.net`;
+
+            const texto = `Hola *${row.cliente}* 🚗, te saludamos de *ONE4CARS*.\n\nNotamos que tu factura *${row.nro_factura}* por un monto de *${row.monto}* tiene más de 30 días vencida.\n\nPor favor, ayúdanos con el pago para mantener tu cuenta activa y evitar suspensiones de despacho.`;
+// Función 2: Ejecuta el envío real de mensajes
+async function ejecutarEnvioMasivo(sock, deudores) {
+    console.log(`🚀 Iniciando envío masivo a ${deudores.length} clientes...`);
+    
+    for (const row of deudores) {
+        try {
+            // El campo celular ya tiene el 58, solo aseguramos el formato JID
+            const jid = `${row.celular}@s.whatsapp.net`;
             
-            const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nEsta factura tiene ${row.dias} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nNotamos que tu factura *${row.nro_factura}* por un monto de *${row.total}* tiene más de 30 días vencida.\n\nPor favor, ayúdanos con el pago para mantener tu cuenta activa y evitar suspensiones de despacho.`;
 
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado a: ${row.nombres}`);
-            
-            // Pausa de 20 segundos para seguridad
-            await new Promise(r => setTimeout(r, 20000));
+            console.log(`✅ Enviado a: ${row.cliente} (${num})`);
+            console.log(`✅ Mensaje enviado a ${row.nombres}`);
+
+            // PAUSA ANTI-BANEO: 30 segundos entre mensajes
+            // PAUSA ANTI-BANEO (30 segundos)
+            await new Promise(resolve => setTimeout(resolve, 30000));
         } catch (e) {
-            console.error(`❌ Error enviando a ${row.nombres}:`, e.message);
+            console.error(`❌ Error enviando a ${row.nombres}:`, e);
         }
+
+        return `Envío masivo finalizado. Total: ${rows.length}`;
+
+    } catch (error) {
+        console.error("❌ Error en base de datos MySQL:", error);
+        throw error;
+    } finally {
+        if (connection) await connection.end();
     }
-    console.log("🏁 Proceso terminado.");
+    return true;
 }
 
+module.exports = { ejecutarCobranza };
 module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo };
