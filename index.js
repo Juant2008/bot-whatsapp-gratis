@@ -7,29 +7,19 @@ const pino = require('pino');
 const url = require('url');
 const { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas } = require('./cobranza');
 
-// ========================================================
-// 1. CONFIGURACIÓN PERMANENTE
 const mongoURI = "mongodb+srv://one4cars:v6228688@one4cars.fpwdlwe.mongodb.net/?retryWrites=true&w=majority";
-// ========================================================
-
 let qrCodeData = "";
 global.sockBot = null;
 let deudoresEnMemoria = []; 
 
-// Conexión a MongoDB para persistencia
-mongoose.connect(mongoURI)
-    .then(() => console.log("✅ Memoria MongoDB activa"))
-    .catch(err => console.error("❌ Error MongoDB:", err.message));
+mongoose.connect(mongoURI).then(() => console.log("✅ Memoria MongoDB activa")).catch(err => console.error("❌ Error MongoDB:", err.message));
 
 async function startBot() {
-    // AQUÍ ESTÁ LA CORRECCIÓN: useMultiFileAuthState ahora está definido arriba
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
-        version,
-        auth: state,
-        printQRInTerminal: false,
+        version, auth: state, printQRInTerminal: false,
         logger: pino({ level: 'error' }),
         browser: ["ONE4CARS Bot", "Chrome", "1.0.0"],
         syncFullHistory: false,
@@ -44,12 +34,8 @@ async function startBot() {
         const { connection, lastDisconnect, qr } = update;
         if (qr) qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
         if (connection === 'close') {
-            const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
-            if (statusCode !== DisconnectReason.loggedOut) setTimeout(() => startBot(), 5000);
-        } else if (connection === 'open') {
-            qrCodeData = "BOT ONLINE ✅";
-            console.log('🚀 ONE4CARS EN LÍNEA');
-        }
+            if ((lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut) setTimeout(() => startBot(), 5000);
+        } else if (connection === 'open') { qrCodeData = "BOT ONLINE ✅"; }
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -61,37 +47,12 @@ async function startBot() {
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
         const saludoEnlace = 'Saludos estimado, toque el siguiente enlace para ';
 
-        // --- LÓGICA DE BOTONES ---
-        if (body.includes('medios de pago') || body.includes('numero de cuenta')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} consultar:\n\n👉 *MEDIOS DE PAGO*\nhttps://www.one4cars.com/medios_de_pago.php` });
-        }
-        else if (body.includes('estado de cuenta')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} obtener su:\n\n👉 *ESTADO DE CUENTA*\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php` });
-        }
-        else if (body.includes('lista de precios') || body.includes('listas de precios')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} ver nuestra:\n\n👉 *LISTA DE PRECIOS*\nhttps://www.one4cars.com/lista_de_precios.php` });
-        }
-        else if (body.includes('tomar pedido')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} realizar su:\n\n👉 *TOMAR PEDIDO*\nhttps://www.one4cars.com/tomar_pedido.php` });
-        }
-        else if (body.includes('afiliar cliente')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} realizar la:\n\n👉 *AFILIAR CLIENTE*\nhttps://www.one4cars.com/afiliacion_cliente.php` });
-        }
-        else if (body.includes('aprobar cliente')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} gestionar la:\n\n👉 *APROBACIÓN DE CLIENTE*\nhttps://www.one4cars.com/aprobadora_clientes.php` });
-        }
-        else if (body.includes('mis clientes')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} gestionar su:\n\n👉 *CARTERA DE CLIENTES*\nhttps://www.one4cars.com/acceso_vendedores.php` });
-        }
-        else if (body.includes('ficha producto')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} consultar la:\n\n👉 *FICHA DE PRODUCTO*\nhttps://www.one4cars.com/consulta_productos.php` });
-        }
-        else if (body.includes('despacho')) {
-            await sock.sendMessage(from, { text: `${saludoEnlace} ver su:\n\n👉 *SEGUIMIENTO DE DESPACHO*\nhttps://www.one4cars.com/despacho_cliente_web.php` });
-        }
-        else if (body.includes('asesor')) {
-            await sock.sendMessage(from, { text: 'Saludos estimado, en un momento un asesor se comunicará con usted de forma manual.' });
-        }
+        if (body.includes('medios de pago')) await sock.sendMessage(from, { text: `${saludoEnlace} consultar:\n\n👉 *MEDIOS DE PAGO*\nhttps://www.one4cars.com/medios_de_pago.php` });
+        else if (body.includes('estado de cuenta')) await sock.sendMessage(from, { text: `${saludoEnlace} obtener su:\n\n👉 *ESTADO DE CUENTA*\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php` });
+        else if (body.includes('lista de precios') || body.includes('listas de precios')) await sock.sendMessage(from, { text: `${saludoEnlace} ver nuestra:\n\n👉 *LISTA DE PRECIOS*\nhttps://www.one4cars.com/lista_de_precios.php` });
+        else if (body.includes('afiliar cliente')) await sock.sendMessage(from, { text: `${saludoEnlace} realizar la:\n\n👉 *AFILIAR CLIENTE*\nhttps://www.one4cars.com/afiliacion_cliente.php` });
+        else if (body.includes('aprobar cliente')) await sock.sendMessage(from, { text: `${saludoEnlace} gestionar la:\n\n👉 *APROBACIÓN DE CLIENTE*\nhttps://www.one4cars.com/aprobadora_clientes.php` });
+        else if (body.includes('asesor')) await sock.sendMessage(from, { text: 'Saludos estimado, en un momento un asesor se comunicará con usted de forma manual.' });
         else {
             const saludos = ['hola', 'buendia', 'buen dia', 'buenos dias', 'buenas tardes', 'saludos'];
             if (saludos.some(s => body.includes(s))) {
@@ -101,7 +62,6 @@ async function startBot() {
     });
 }
 
-// --- SERVIDOR WEB DASHBOARD (IOS OPTIMIZED) ---
 const port = process.env.PORT || 10000;
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
@@ -117,7 +77,6 @@ const server = http.createServer(async (req, res) => {
         };
 
         deudoresEnMemoria = await obtenerListaDeudores(filtros);
-        
         const optVendedores = vendedores.map(v => `<option value="${v.id_vendedor}" ${filtros.id_vendedor == v.id_vendedor ? 'selected' : ''}>${v.nombre}</option>`).join('');
         const optZonas = zonas.map(z => `<option value="${z.id_zona}" ${filtros.id_zona == z.id_zona ? 'selected' : ''}>${z.zona}</option>`).join('');
 
@@ -176,11 +135,11 @@ const server = http.createServer(async (req, res) => {
         <div class="container">
             <form action="/confirmar-envio" method="GET">
                 <div style="display:flex; justify-content:space-between; padding: 10px; font-size: 12px; font-weight: bold; color: #666;">
-                    <span>${deudoresEnMemoria.length} ENCONTRADOS</span>
+                    <span>${deudoresEnMemoria.length} FACTURAS</span>
                     <label style="display:flex; align-items:center; gap:5px;"><input type="checkbox" checked onclick="toggleAll(this)"> TODOS</label>
                 </div>
-                ${items || '<p style="text-align:center; padding:20px; color:#999;">No hay facturas con estos filtros.</p>'}
-                ${deudoresEnMemoria.length > 0 ? '<div class="footer"><button type="submit" class="btn-send">🚀 ENVIAR RECORDATORIOS</button></div>' : ''}
+                ${items || '<p style="text-align:center; padding:20px; color:#999;">No hay resultados.</p>'}
+                ${deudoresEnMemoria.length > 0 ? '<div class="footer"><button type="submit" class="btn-send">🚀 ENVIAR WHATSAPP</button></div>' : ''}
             </form>
         </div>
         </body></html>`);
