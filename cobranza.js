@@ -8,7 +8,7 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-// ... obtenerVendedores y obtenerZonas se mantienen igual ...
+// ... (obtenerVendedores y obtenerZonas se mantienen igual)
 async function obtenerVendedores() {
     let conn;
     try {
@@ -38,7 +38,7 @@ async function obtenerListaDeudores() {
             FROM tab_facturas 
             WHERE pagada = 'NO' AND anulado <> 'si' AND id_cliente <> 334
             AND (total - abono_factura) > 0 
-            AND DATEDIFF(CURDATE(), fecha_reg) > 45
+            AND DATEDIFF(CURDATE(), fecha_reg) > 300
             ORDER BY fecha_reg ASC`
         );
         return rows;
@@ -57,46 +57,44 @@ async function obtenerDetalleFacturas(listaFacturas) {
              FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
             ids
         );
+        console.log(`[DB] Encontradas: ${rows.length} facturas para enviar.`);
         return rows;
-    } catch (e) { console.error("[DB ERROR]", e.message); return []; } 
+    } catch (e) { console.error("[DB] Error:", e.message); return []; } 
     finally { if (connection) await connection.end(); }
 }
 
 async function ejecutarEnvioMasivo(sock, deudores) {
-    console.log(`\n--- 🚀 PROCESANDO ENVÍO PARA ${deudores.length} CLIENTES ---`);
+    console.log(`\n--- 🚀 INICIO DE ENVÍO A ${deudores.length} CLIENTES ---`);
     
     for (const row of deudores) {
         try {
-            // 1. LIMPIEZA DE ESPACIOS Y CARACTERES
-            let numRaw = row.celular.toString().replace(/\s+/g, '').replace(/\D/g, ''); 
+            // 1. LIMPIEZA QUIRÚRGICA DEL NÚMERO
+            let num = row.celular.toString().replace(/\D/g, ''); // Quita espacios, letras y símbolos
             
-            // 2. CORRECCIÓN DEL 580 (Error común en tu base de datos)
+            // 2. CORRECCIÓN VENEZUELA (Quitar 0 después de 58)
             // Si el número es 580412... lo convertimos a 58412...
-            let numFinal = numRaw;
-            if (numRaw.startsWith('580')) {
-                numFinal = '58' + numRaw.substring(3);
-            } else if (!numRaw.startsWith('58')) {
-                numFinal = '58' + numRaw;
+            if (num.startsWith('580')) {
+                num = '58' + num.substring(3);
             }
             
-            const jid = `${numFinal}@s.whatsapp.net`;
+            const jid = `${num}@s.whatsapp.net`;
             const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
             
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nEsta factura tiene ${row.dias_mora} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
 
-            // LOG DE CONTROL PARA RENDER
-            console.log(`📤 Cliente: ${row.nombres} | Original: ${row.celular} | Procesado: ${numFinal}`);
+            console.log(`📤 Intentando enviar a: ${row.nombres} (${jid})`);
             
             await sock.sendMessage(jid, { text: texto });
             
-            console.log(`✅ MENSAJE ENTREGADO A WHATSAPP`);
+            console.log(`✅ MENSAJE ENTREGADO`);
             
-            // Pausa de 15 segundos entre mensajes
-            await new Promise(r => setTimeout(r, 15000));
+            // Pausa de seguridad para evitar baneo (20 seg)
+            await new Promise(r => setTimeout(r, 20000));
         } catch (e) { 
-            console.error(`❌ ERROR ENVIANDO A ${row.nombres}:`, e.message); 
+            console.error(`❌ ERROR REAL con ${row.nombres}:`, e.message); 
         }
     }
+    console.log("--- 🏁 FIN DEL PROCESO DE COBRANZA ---\n");
 }
 
 module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerDetalleFacturas, obtenerVendedores, obtenerZonas };
