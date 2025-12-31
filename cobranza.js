@@ -8,7 +8,7 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-// ... obtenerVendedores y obtenerZonas se mantienen igual ...
+// ... (obtenerVendedores y obtenerZonas se mantienen igual)
 async function obtenerVendedores() {
     let conn;
     try {
@@ -63,40 +63,49 @@ async function obtenerDetalleFacturas(listaFacturas) {
 }
 
 async function ejecutarEnvioMasivo(sock, deudores) {
-    console.log(`\n--- 🚀 PROCESANDO ENVÍO PARA ${deudores.length} CLIENTES ---`);
+    // VALIDACIÓN CRÍTICA: ¿El bot está realmente listo?
+    if (!sock || !sock.user || !sock.user.id) {
+        console.error("❌ EL BOT NO ESTÁ LISTO: Falta la identidad del usuario (sock.user.id).");
+        return;
+    }
+
+    console.log(`\n--- 🚀 INICIANDO ENVÍO A ${deudores.length} CLIENTES ---`);
     
     for (const row of deudores) {
         try {
-            // 1. LIMPIEZA DE ESPACIOS Y CARACTERES
-            let numRaw = row.celular.toString().replace(/\s+/g, '').replace(/\D/g, ''); 
+            // Validar que el cliente tenga celular
+            if (!row.celular) {
+                console.log(`⚠️ Saltando a ${row.nombres}: No tiene número de celular.`);
+                continue;
+            }
+
+            // LIMPIEZA QUIRÚRGICA
+            let numRaw = row.celular.toString().replace(/\D/g, ''); 
             
-            // 2. CORRECCIÓN DEL 580 (Error común en tu base de datos)
-            // Si el número es 580412... lo convertimos a 58412...
-            let numFinal = numRaw;
             if (numRaw.startsWith('580')) {
-                numFinal = '58' + numRaw.substring(3);
+                numRaw = '58' + numRaw.substring(3);
             } else if (!numRaw.startsWith('58')) {
-                numFinal = '58' + numRaw;
+                numRaw = '58' + numRaw;
             }
             
-            const jid = `${numFinal}@s.whatsapp.net`;
+            const jid = `${numRaw}@s.whatsapp.net`;
             const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
             
             const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
 
-            // LOG DE CONTROL PARA RENDER
-            console.log(`📤 Cliente: ${row.nombres} | Original: ${row.celular} | Procesado: ${numFinal}`);
+            console.log(`📤 Enviando a: ${row.nombres} (${jid})`);
             
+            // Envío con el ID del bot ya verificado
             await sock.sendMessage(jid, { text: texto });
             
-            console.log(`✅ MENSAJE ENTREGADO A WHATSAPP`);
+            console.log(`✅ ENTREGADO`);
             
-            // Pausa de 15 segundos entre mensajes
             await new Promise(r => setTimeout(r, 15000));
         } catch (e) { 
-            console.error(`❌ ERROR ENVIANDO A ${row.nombres}:`, e.message); 
+            console.error(`❌ ERROR REAL con ${row.nombres}:`, e.message); 
         }
     }
+    console.log("--- 🏁 PROCESO TERMINADO ---\n");
 }
 
 module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerDetalleFacturas, obtenerVendedores, obtenerZonas };
