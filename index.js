@@ -5,7 +5,7 @@ const qrcode = require('qrcode');
 const http = require('http');
 const pino = require('pino');
 const url = require('url');
-const { obtenerListaDeudores, ejecutarEnvioMasivo } = require('./cobranza');
+const { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerZonas } = require('./cobranza');
 
 const mongoURI = "mongodb+srv://one4cars:v6228688@one4cars.fpwdlwe.mongodb.net/?retryWrites=true&w=majority";
 let qrCodeData = "";
@@ -44,8 +44,6 @@ async function startBot() {
         if (body.includes('medios de pago')) await sock.sendMessage(from, { text: `${saludo} consultar:\n\n👉 *MEDIOS DE PAGO*\nhttps://www.one4cars.com/medios_de_pago.php` });
         else if (body.includes('estado de cuenta')) await sock.sendMessage(from, { text: `${saludo} obtener su:\n\n👉 *ESTADO DE CUENTA*\nhttps://www.one4cars.com/estado_de_cuenta_cliente.php` });
         else if (body.includes('lista de precios')) await sock.sendMessage(from, { text: `${saludo} ver nuestra:\n\n👉 *LISTA DE PRECIOS*\nhttps://www.one4cars.com/lista_de_precios.php` });
-        else if (body.includes('afiliar cliente')) await sock.sendMessage(from, { text: `${saludo} realizar la:\n\n👉 *AFILIAR CLIENTE*\nhttps://www.one4cars.com/afiliacion_cliente.php` });
-        else if (body.includes('asesor')) await sock.sendMessage(from, { text: 'Saludos estimado, un asesor se comunicará con usted en breve.' });
         else {
             const saludos = ['hola', 'buendia', 'buen dia', 'buenos dias', 'buenas tardes'];
             if (saludos.some(s => body.includes(s))) {
@@ -61,47 +59,56 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
     if (parsedUrl.pathname === '/cobrar-ahora') {
-        deudoresEnMemoria = await obtenerListaDeudores();
+        const zonaSeleccionada = parsedUrl.query.zona || '';
+        const listaZonas = await obtenerZonas();
+        deudoresEnMemoria = await obtenerListaDeudores(zonaSeleccionada);
+        
+        let selectZonas = listaZonas.map(z => `<option value="${z.zona}" ${zonaSeleccionada === z.zona ? 'selected' : ''}>${z.zona}</option>`).join('');
+
         let cards = deudoresEnMemoria.map(d => `
             <label class="card">
                 <input type="checkbox" name="facturas" value="${d.nro_factura}" checked class="user-check">
-                <div class="card-info">
+                <div class="card-body">
                     <div class="c-name">${d.nombres}</div>
-                    <div class="c-sub">Fac: ${d.nro_factura}</div>
+                    <div class="c-sub">Fac: ${d.nro_factura} • ${d.zona}</div>
                 </div>
                 <div class="c-price">
                     <div class="val">$${parseFloat(d.saldo_pendiente).toFixed(2)}</div>
+                    <div class="days">${d.dias_transcurridos} d&iacute;as</div>
                 </div>
             </label>`).join('');
 
-        res.write(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
+        res.write(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
         <style>
-            body { font-family: sans-serif; background: #f2f2f7; margin: 0; padding-bottom: 100px; }
-            .nav { background: #007aff; color: white; padding: 15px; text-align: center; font-weight: bold; position: sticky; top: 0; }
+            body { font-family: -apple-system, sans-serif; background: #f2f2f7; margin: 0; padding-bottom: 120px; }
+            .nav { background: #007aff; color: white; padding: 15px; text-align: center; font-weight: bold; position: sticky; top: 0; z-index: 20; }
+            .filter-bar { background: white; padding: 10px; border-bottom: 1px solid #ddd; display: flex; gap: 10px; align-items: center; position: sticky; top: 50px; z-index: 15; }
+            select { flex-grow: 1; padding: 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; background: #f8f8f8; }
+            .btn-f { background: #007aff; color: white; border: none; padding: 10px 15px; border-radius: 8px; font-weight: bold; }
             .card { background: white; border-radius: 15px; padding: 15px; margin: 10px; display: flex; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-            .card-info { flex-grow: 1; padding-left: 10px; overflow: hidden; }
+            .card-body { flex-grow: 1; padding-left: 10px; overflow: hidden; }
             .c-name { font-weight: bold; font-size: 14px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             .c-sub { font-size: 11px; color: #8e8e93; }
-            .c-price { text-align: right; min-width: 80px; }
+            .c-price { text-align: right; min-width: 90px; }
             .val { font-weight: 800; color: #ff3b30; font-size: 16px; }
-            .footer { position: fixed; bottom: 0; width: 100%; background: white; padding: 15px; border-top: 1px solid #ddd; box-sizing: border-box; }
+            .days { font-size: 11px; color: #ff9500; font-weight: bold; }
+            .footer { position: fixed; bottom: 0; width: 100%; background: rgba(255,255,255,0.9); padding: 15px; border-top: 1px solid #ddd; backdrop-filter: blur(10px); box-sizing: border-box; z-index: 30; }
             .btn-s { background: #34c759; color: white; border: none; padding: 16px; border-radius: 12px; font-weight: bold; width: 100%; font-size: 16px; }
-            input[type="checkbox"] { width: 22px; height: 22px; }
+            input[type="checkbox"] { width: 22px; height: 22px; accent-color: #007aff; }
         </style>
-        <script>
-            function toggleAll(source) {
-                const checkboxes = document.querySelectorAll('.user-check');
-                checkboxes.forEach(c => c.checked = source.checked);
-            }
-        </script></head><body>
+        </head><body>
         <div class="nav">Cobranza ONE4CARS</div>
+        <form action="/cobrar-ahora" method="GET" class="filter-bar">
+            <select name="zona"><option value="">Todas las Zonas</option>${selectZonas}</select>
+            <button type="submit" class="btn-f">Filtrar</button>
+        </form>
         <form action="/confirmar-envio" method="GET">
-            <div style="padding: 10px; display: flex; justify-content: space-between; font-size: 12px;">
-                <span>Total: ${deudoresEnMemoria.length}</span>
-                <label><input type="checkbox" checked onclick="toggleAll(this)"> Todos</label>
+            <div style="padding: 10px; display: flex; justify-content: space-between; font-size: 12px; color: #666;">
+                <span>Total: ${deudoresEnMemoria.length} facturas</span>
+                <label><input type="checkbox" checked onclick="const c=document.querySelectorAll('.user-check');c.forEach(x=>x.checked=this.checked)"> Todos</label>
             </div>
-            ${cards || '<p style="text-align:center; padding:20px;">No hay facturas.</p>'}
-            ${cards ? '<div class="footer"><button type="submit" class="btn-s">🚀 ENVIAR WHATSAPP</button></div>' : ''}
+            ${cards || '<p style="text-align:center; padding:20px;">No hay deudas en esta zona.</p>'}
+            ${cards ? '<div class="footer"><button type="submit" class="btn-s">🚀 ENVIAR SELECCIONADOS</button></div>' : ''}
         </form>
         </body></html>`);
         res.end();
