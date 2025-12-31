@@ -38,7 +38,7 @@ async function obtenerListaDeudores() {
             FROM tab_facturas 
             WHERE pagada = 'NO' AND anulado <> 'si' AND id_cliente <> 334
             AND (total - abono_factura) > 0 
-            AND DATEDIFF(CURDATE(), fecha_reg) > 300
+            AND DATEDIFF(CURDATE(), fecha_reg) > 45
             ORDER BY fecha_reg ASC`
         );
         return rows;
