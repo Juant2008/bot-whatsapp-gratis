@@ -8,36 +8,58 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-// Ahora recibe un objeto de filtros
+// Obtener lista de vendedores para el selector
+async function obtenerVendedores() {
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+        const [rows] = await connection.execute('SELECT id_vendedor, nombre FROM tab_vendedores WHERE activo = "si" ORDER BY nombre ASC');
+        return rows;
+    } catch (e) { return []; } finally { if (connection) await connection.end(); }
+}
+
+// Obtener lista de zonas para el selector
+async function obtenerZonas() {
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+        const [rows] = await connection.execute('SELECT id_zona, zona FROM tab_zonas ORDER BY zona ASC');
+        return rows;
+    } catch (e) { return []; } finally { if (connection) await connection.end(); }
+}
+
 async function obtenerListaDeudores(filtros = {}) {
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
         
-        // Valores por defecto
-        const minDias = filtros.dias || 300;
-        const vendedor = filtros.vendedor || '';
-        const zona = filtros.zona || '';
+        const minDias = filtros.dias || 30;
+        const idVendedor = filtros.id_vendedor || '';
+        const idZona = filtros.id_zona || '';
 
+        // Consulta uniendo tablas para mostrar nombres reales
         let sql = `
-            SELECT celular, nombres, nro_factura, total, fecha_reg, vendedor, zona,
-            DATEDIFF(CURDATE(), fecha_reg) AS dias_transcurridos
-            FROM tab_facturas 
-            WHERE pagada = 'NO' 
-            AND id_cliente <> 334 
-            AND anulado <> 'si'
-            AND DATEDIFF(CURDATE(), fecha_reg) >= ?
+            SELECT f.celular, f.nombres, f.nro_factura, f.total, f.fecha_reg, 
+                   v.nombre as vendedor_nom, z.zona as zona_nom,
+                   DATEDIFF(CURDATE(), f.fecha_reg) AS dias_transcurridos
+            FROM tab_facturas f
+            LEFT JOIN tab_vendedores v ON f.id_vendedor = v.id_vendedor
+            LEFT JOIN tab_zonas z ON f.id_zona = z.id_zona
+            WHERE f.pagada = 'NO' 
+            AND f.id_cliente <> 334 
+            AND f.anulado <> 'si'
+            AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?
         `;
 
         const params = [minDias];
 
-        if (vendedor) {
-            sql += ` AND vendedor LIKE ?`;
-            params.push(`%${vendedor}%`);
+        if (idVendedor) {
+            sql += ` AND f.id_vendedor = ?`;
+            params.push(idVendedor);
         }
-        if (zona) {
-            sql += ` AND zona LIKE ?`;
-            params.push(`%${zona}%`);
+        if (idZona) {
+            sql += ` AND f.id_zona = ?`;
+            params.push(idZona);
         }
 
         sql += ` ORDER BY dias_transcurridos DESC`;
@@ -53,26 +75,19 @@ async function obtenerListaDeudores(filtros = {}) {
 }
 
 async function ejecutarEnvioMasivo(sock, deudoresSeleccionados) {
-    console.log(`\n--- 🚀 ENVIANDO ${deudoresSeleccionados.length} MENSAJES ---`);
     for (const row of deudoresSeleccionados) {
         try {
             let num = row.celular.toString().replace(/\D/g, '');
             if (!num.startsWith('58')) num = '58' + num;
             const jid = `${num}@s.whatsapp.net`;
-            
-            // Formateamos la fecha para que no salga el GMT largo
-            const fechaCorta = new Date(row.fecha_reg).toISOString().split('T')[0];
+            const fechaValida = new Date(row.fecha_reg).toISOString().split('T')[0];
 
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* por un monto de *${row.total}* tiene *${row.dias_transcurridos} días* vencida (Emitida el ${fechaCorta}).\n\nPor favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe informamos que su factura *${row.nro_factura}* tiene *${row.dias_transcurridos} días* vencida (desde el ${fechaValida}).\n\nPor favor, gestione su pago a la brevedad.`;
 
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado: ${row.nombres} (${row.dias_transcurridos} días)`);
-
-            await new Promise(resolve => setTimeout(resolve, 15000));
-        } catch (e) {
-            console.error(`❌ Error enviando a ${row.nombres}:`, e.message);
-        }
+            await new Promise(resolve => setTimeout(resolve, 20000));
+        } catch (e) { console.error("Error envío:", e.message); }
     }
 }
 
-module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo };
+module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas };
