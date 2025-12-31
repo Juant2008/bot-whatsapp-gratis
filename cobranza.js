@@ -8,18 +8,45 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-async function obtenerListaDeudores() {
+// Función para llenar el menú desplegable de zonas
+async function obtenerZonas() {
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
-        // Consulta simple: Solo lo que no está pagado y no está anulado
-        const [rows] = await connection.execute(
-            `SELECT celular, nombres, nro_factura, total, abono_factura, 
-            (total - abono_factura) as saldo_pendiente, fecha_reg 
+        const [rows] = await connection.execute('SELECT DISTINCT zona FROM tab_zonas ORDER BY zona ASC');
+        return rows;
+    } catch (e) {
+        console.error("Error cargando zonas:", e.message);
+        return [];
+    } finally {
+        if (connection) await connection.end();
+    }
+}
+
+async function obtenerListaDeudores(filtroZona = '') {
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+        
+        // Consulta con resta de abono y filtro de zona opcional
+        let sql = `
+            SELECT celular, nombres, nro_factura, total, abono_factura, 
+            (total - abono_factura) AS saldo_pendiente, fecha_reg, zona,
+            DATEDIFF(CURDATE(), fecha_reg) AS dias_transcurridos 
             FROM tab_facturas 
             WHERE pagada = 'NO' AND anulado <> 'si' AND id_cliente <> 334
-            ORDER BY fecha_reg ASC`
-        );
+            AND (total - abono_factura) > 0
+        `;
+        
+        const params = [];
+        if (filtroZona) {
+            sql += ` AND zona = ?`;
+            params.push(filtroZona);
+        }
+        
+        sql += ` ORDER BY fecha_reg ASC`;
+
+        const [rows] = await connection.execute(sql, params);
         return rows;
     } catch (error) {
         console.error("Error MySQL:", error.message);
@@ -40,8 +67,7 @@ async function ejecutarEnvioMasivo(sock, deudores) {
             const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
 
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado a: ${row.nombres}`);
-            
+            console.log(`✅ Enviado a: ${row.nombres} | Saldo: ${saldo}`);
             await new Promise(r => setTimeout(r, 20000));
         } catch (e) {
             console.error(`Error enviando a ${row.nombres}`);
@@ -49,4 +75,4 @@ async function ejecutarEnvioMasivo(sock, deudores) {
     }
 }
 
-module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo };
+module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerZonas };
