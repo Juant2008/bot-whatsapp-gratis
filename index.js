@@ -113,7 +113,7 @@ http.createServer(async (req, res) => {
         </head><body>
         <div class="header">
             <h2>Gestión de Cobranza</h2>
-            <p>ONE4CARS 🚗 • Deudas > 300 días</p>
+            <p>ONE4CARS 🚗 • Deudas > 40 días</p>
         </div>
         <div class="container">
             <form action="/confirmar-envio" method="GET">
