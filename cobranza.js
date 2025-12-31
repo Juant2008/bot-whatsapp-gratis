@@ -8,6 +8,7 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
+// ... (obtenerVendedores y obtenerZonas se mantienen igual)
 async function obtenerVendedores() {
     let conn;
     try {
@@ -37,7 +38,7 @@ async function obtenerListaDeudores() {
             FROM tab_facturas 
             WHERE pagada = 'NO' AND anulado <> 'si' AND id_cliente <> 334
             AND (total - abono_factura) > 0 
-            AND DATEDIFF(CURDATE(), fecha_reg) > 45
+            AND DATEDIFF(CURDATE(), fecha_reg) > 300
             ORDER BY fecha_reg ASC`
         );
         return rows;
@@ -51,49 +52,49 @@ async function obtenerDetalleFacturas(listaFacturas) {
         connection = await mysql.createConnection(dbConfig);
         const ids = Array.isArray(listaFacturas) ? listaFacturas : [listaFacturas];
         const placeholders = ids.map(() => '?').join(',');
-        
-        // Buscamos los datos detallados de las facturas marcadas
         const [rows] = await connection.query(
             `SELECT celular, nombres, nro_factura, (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_mora 
              FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
             ids
         );
-        console.log(`[DB] Facturas encontradas en DB: ${rows.length}`);
+        console.log(`[DB] Encontradas: ${rows.length} facturas para enviar.`);
         return rows;
-    } catch (e) { 
-        console.error("[DB] Error consultando detalles:", e.message);
-        return []; 
-    } finally { if (connection) await connection.end(); }
+    } catch (e) { console.error("[DB] Error:", e.message); return []; } 
+    finally { if (connection) await connection.end(); }
 }
 
 async function ejecutarEnvioMasivo(sock, deudores) {
-    console.log(`[BOT] Iniciando tanda de ${deudores.length} mensajes...`);
+    console.log(`\n--- 🚀 INICIO DE ENVÍO A ${deudores.length} CLIENTES ---`);
     
     for (const row of deudores) {
         try {
-            // LIMPIEZA DEL NÚMERO
-            let num = row.celular.toString().replace(/\D/g, ''); // Solo números
-            if (num.startsWith('0')) num = num.substring(1);
-            if (!num.startsWith('58')) num = '58' + num;
+            // 1. LIMPIEZA QUIRÚRGICA DEL NÚMERO
+            let num = row.celular.toString().replace(/\D/g, ''); // Quita espacios, letras y símbolos
+            
+            // 2. CORRECCIÓN VENEZUELA (Quitar 0 después de 58)
+            // Si el número es 580412... lo convertimos a 58412...
+            if (num.startsWith('580')) {
+                num = '58' + num.substring(3);
+            }
             
             const jid = `${num}@s.whatsapp.net`;
             const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
             
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nEsta factura tiene ${row.dias_mora} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
 
-            console.log(`[BOT] Enviando a ${row.nombres} (${jid})`);
+            console.log(`📤 Intentando enviar a: ${row.nombres} (${jid})`);
             
             await sock.sendMessage(jid, { text: texto });
             
-            console.log(`[BOT] ✅ Mensaje entregado a WhatsApp`);
+            console.log(`✅ MENSAJE ENTREGADO`);
             
-            // Pausa obligatoria para evitar baneo
-            await new Promise(r => setTimeout(r, 10000)); 
+            // Pausa de seguridad para evitar baneo (20 seg)
+            await new Promise(r => setTimeout(r, 20000));
         } catch (e) { 
-            console.error(`[BOT] ❌ Error enviando a ${row.nombres}:`, e.message); 
+            console.error(`❌ ERROR REAL con ${row.nombres}:`, e.message); 
         }
     }
-    console.log("[BOT] Tanda finalizada.");
+    console.log("--- 🏁 FIN DEL PROCESO DE COBRANZA ---\n");
 }
 
 module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerDetalleFacturas, obtenerVendedores, obtenerZonas };
