@@ -8,7 +8,7 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-// Función para llenar el menú desplegable de zonas
+// Traer las zonas reales de tu tabla tab_zonas
 async function obtenerZonas() {
     let connection;
     try {
@@ -16,32 +16,33 @@ async function obtenerZonas() {
         const [rows] = await connection.execute('SELECT DISTINCT zona FROM tab_zonas ORDER BY zona ASC');
         return rows;
     } catch (e) {
-        console.error("Error cargando zonas:", e.message);
+        console.error("Error MySQL Zonas:", e.message);
         return [];
     } finally {
         if (connection) await connection.end();
     }
 }
 
-async function obtenerListaDeudores(filtroZona = '') {
+async function obtenerListaDeudores(zonaFiltro = '') {
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
         
-        // Consulta con resta de abono y filtro de zona opcional
+        // Consulta base: resta abono al total y filtra por 300 días
         let sql = `
             SELECT celular, nombres, nro_factura, total, abono_factura, 
             (total - abono_factura) AS saldo_pendiente, fecha_reg, zona,
-            DATEDIFF(CURDATE(), fecha_reg) AS dias_transcurridos 
+            DATEDIFF(CURDATE(), fecha_reg) AS dias_mora
             FROM tab_facturas 
             WHERE pagada = 'NO' AND anulado <> 'si' AND id_cliente <> 334
             AND (total - abono_factura) > 0
+            AND DATEDIFF(CURDATE(), fecha_reg) > 300
         `;
         
         const params = [];
-        if (filtroZona) {
+        if (zonaFiltro && zonaFiltro !== '') {
             sql += ` AND zona = ?`;
-            params.push(filtroZona);
+            params.push(zonaFiltro);
         }
         
         sql += ` ORDER BY fecha_reg ASC`;
@@ -49,7 +50,7 @@ async function obtenerListaDeudores(filtroZona = '') {
         const [rows] = await connection.execute(sql, params);
         return rows;
     } catch (error) {
-        console.error("Error MySQL:", error.message);
+        console.error("Error MySQL Deudores:", error.message);
         return [];
     } finally {
         if (connection) await connection.end();
@@ -64,13 +65,13 @@ async function ejecutarEnvioMasivo(sock, deudores) {
             const jid = `${num}@s.whatsapp.net`;
             
             const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nEsta deuda tiene ${row.dias_mora} días de vencimiento. Por favor, gestione su pago a la brevedad.`;
 
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado a: ${row.nombres} | Saldo: ${saldo}`);
+            console.log(`✅ Enviado: ${row.nombres}`);
             await new Promise(r => setTimeout(r, 20000));
         } catch (e) {
-            console.error(`Error enviando a ${row.nombres}`);
+            console.error(`❌ Error enviando a ${row.nombres}`);
         }
     }
 }
