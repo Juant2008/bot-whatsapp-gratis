@@ -8,99 +8,82 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
-// ... (Funciones obtenerVendedores y obtenerZonas se mantienen igual)
 async function obtenerVendedores() {
-    let connection;
+    let conn;
     try {
-        connection = await mysql.createConnection(dbConfig);
-        const [rows] = await connection.execute('SELECT id_vendedor, nombre FROM tab_vendedores WHERE activo = "si" ORDER BY nombre ASC');
+        conn = await mysql.createConnection(dbConfig);
+        const [rows] = await conn.execute('SELECT DISTINCT nombre FROM tab_vendedores WHERE activo = "si" ORDER BY nombre ASC');
         return rows;
-    } catch (e) { return []; } finally { if (connection) await connection.end(); }
+    } catch (e) { return []; } finally { if (conn) await conn.end(); }
 }
 
 async function obtenerZonas() {
-    let connection;
+    let conn;
     try {
-        connection = await mysql.createConnection(dbConfig);
-        const [rows] = await connection.execute('SELECT id_zona, zona FROM tab_zonas ORDER BY zona ASC');
+        conn = await mysql.createConnection(dbConfig);
+        const [rows] = await conn.execute('SELECT DISTINCT zona FROM tab_zonas ORDER BY zona ASC');
         return rows;
-    } catch (e) { return []; } finally { if (connection) await connection.end(); }
+    } catch (e) { return []; } finally { if (conn) await conn.end(); }
 }
 
 async function obtenerListaDeudores(filtros = {}) {
-    let connection;
+    let conn;
     try {
-        connection = await mysql.createConnection(dbConfig);
+        conn = await mysql.createConnection(dbConfig);
         const minDias = filtros.dias || 30;
-        const idVendedor = filtros.id_vendedor || '';
-        const idZona = filtros.id_zona || '';
+        const vendedor = filtros.vendedor || '';
+        const zona = filtros.zona || '';
 
         let sql = `
-            SELECT f.celular, f.nombres, f.nro_factura, f.total, f.abono_factura,
-                   (f.total - f.abono_factura) AS saldo_pendiente,
-                   f.fecha_reg, v.nombre as vendedor_nom, z.zona as zona_nom,
-                   DATEDIFF(CURDATE(), f.fecha_reg) AS dias_transcurridos
-            FROM tab_facturas f
-            LEFT JOIN tab_vendedores v ON f.vendedor = v.nombre
-            LEFT JOIN tab_zonas z ON f.zona = z.zona
-            WHERE f.pagada = 'NO' AND f.id_cliente <> 334 AND f.anulado <> 'si'
-            AND (f.total - f.abono_factura) > 0 AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?
+            SELECT celular, nombres, nro_factura, total, abono_factura,
+                   (total - abono_factura) AS saldo_pendiente,
+                   fecha_reg, vendedor as vendedor_nom, zona as zona_nom,
+                   DATEDIFF(CURDATE(), fecha_reg) AS dias_transcurridos
+            FROM tab_facturas 
+            WHERE pagada = 'NO' AND id_cliente <> 334 AND anulado <> 'si'
+            AND (total - abono_factura) > 0 
+            AND DATEDIFF(CURDATE(), fecha_reg) >= ?
         `;
         const params = [minDias];
-        if (idVendedor) { sql += ` AND v.id_vendedor = ?`; params.push(idVendedor); }
-        if (idZona) { sql += ` AND z.id_zona = ?`; params.push(idZona); }
+        if (vendedor) { sql += ` AND vendedor = ?`; params.push(vendedor); }
+        if (zona) { sql += ` AND zona = ?`; params.push(zona); }
         sql += ` ORDER BY dias_transcurridos DESC`;
-        const [rows] = await connection.execute(sql, params);
+
+        const [rows] = await conn.execute(sql, params);
         return rows;
-    } catch (error) { return []; } finally { if (connection) await connection.end(); }
+    } catch (e) { console.error(e); return []; } finally { if (conn) await conn.end(); }
 }
 
-// ESTA FUNCIÓN ES LA CLAVE: Ahora es más robusta
-async function obtenerDetalleFacturas(facturasIds) {
-    if (!facturasIds || facturasIds.length === 0) return [];
-    let connection;
+async function obtenerDetalleFacturas(ids) {
+    if (!ids || ids.length === 0) return [];
+    let conn;
     try {
-        connection = await mysql.createConnection(dbConfig);
-        const placeholders = facturasIds.map(() => '?').join(',');
-        
-        console.log(`[DB] Buscando datos para facturas: ${facturasIds.join(', ')}`);
-        
-        const [rows] = await connection.query(
-            `SELECT celular, nombres, nro_factura, total, abono_factura, 
-            (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_transcurridos 
-            FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
-            facturasIds
+        conn = await mysql.createConnection(dbConfig);
+        const formatIds = Array.isArray(ids) ? ids : [ids];
+        const placeholders = formatIds.map(() => '?').join(',');
+        const [rows] = await conn.query(
+            `SELECT celular, nombres, nro_factura, (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_transcurridos 
+             FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
+            formatIds
         );
-        
-        console.log(`[DB] Se encontraron ${rows.length} registros válidos.`);
         return rows;
-    } catch (e) { 
-        console.error("[DB] ERROR:", e.message); 
-        return []; 
-    } finally { if (connection) await connection.end(); }
+    } catch (e) { return []; } finally { if (conn) await conn.end(); }
 }
 
 async function ejecutarEnvioMasivo(sock, deudores) {
-    console.log(`[WHATSAPP] Iniciando tanda de ${deudores.length} mensajes.`);
+    console.log(`🚀 Iniciando envío a ${deudores.length} clientes`);
     for (const row of deudores) {
         try {
             let num = row.celular.toString().replace(/\D/g, '');
             if (!num.startsWith('58')) num = '58' + num;
             const jid = `${num}@s.whatsapp.net`;
-            const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
-
-            const texto = `Hola *${row.nombres}* 🚗, te saludamos de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
-
-            console.log(`[WHATSAPP] Enviando a ${row.nombres}...`);
+            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nFactura: *${row.nro_factura}*\nSaldo Pendiente: *$${parseFloat(row.saldo_pendiente).toFixed(2)}*\nDías vencidos: *${row.dias_transcurridos}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            
             await sock.sendMessage(jid, { text: texto });
-            console.log(`[WHATSAPP] ✅ ENTREGADO`);
-
-            await new Promise(resolve => setTimeout(resolve, 15000));
-        } catch (e) { 
-            console.error(`[WHATSAPP] ❌ ERROR con ${row.nombres}:`, e.message); 
-        }
+            console.log(`✅ Enviado a ${row.nombres}`);
+            await new Promise(r => setTimeout(r, 15000));
+        } catch (e) { console.log("Error en envío unitario"); }
     }
-    console.log("[WHATSAPP] --- Proceso terminado ---");
 }
 
 module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas, obtenerDetalleFacturas };
