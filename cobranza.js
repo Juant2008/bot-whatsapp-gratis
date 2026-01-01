@@ -30,7 +30,7 @@ async function obtenerListaDeudores(filtros = {}) {
     let conn;
     try {
         conn = await mysql.createConnection(dbConfig);
-        const minDias = filtros.dias || 30;
+        const minDias = filtros.dias || 0;
         const vendedor = filtros.vendedor || '';
         const zona = filtros.zona || '';
 
@@ -40,7 +40,8 @@ async function obtenerListaDeudores(filtros = {}) {
                    fecha_reg, vendedor as vendedor_nom, zona as zona_nom,
                    DATEDIFF(CURDATE(), fecha_reg) AS dias_transcurridos
             FROM tab_facturas 
-            WHERE pagada = 'NO' AND id_cliente <> 334 AND anulado <> 'si'
+            WHERE pagada = 'NO' 
+            AND (anulado IS NULL OR anulado <> 'si')
             AND (total - abono_factura) > 0 
             AND DATEDIFF(CURDATE(), fecha_reg) >= ?
         `;
@@ -54,36 +55,29 @@ async function obtenerListaDeudores(filtros = {}) {
     } catch (e) { console.error(e); return []; } finally { if (conn) await conn.end(); }
 }
 
-async function obtenerDetalleFacturas(ids) {
-    if (!ids || ids.length === 0) return [];
-    let conn;
-    try {
-        conn = await mysql.createConnection(dbConfig);
-        const formatIds = Array.isArray(ids) ? ids : [ids];
-        const placeholders = formatIds.map(() => '?').join(',');
-        const [rows] = await conn.query(
-            `SELECT celular, nombres, nro_factura, (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_transcurridos 
-             FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
-            formatIds
-        );
-        return rows;
-    } catch (e) { return []; } finally { if (conn) await conn.end(); }
-}
-
-async function ejecutarEnvioMasivo(sock, deudores) {
-    console.log(`🚀 Iniciando envío a ${deudores.length} clientes`);
-    for (const row of deudores) {
+async function ejecutarEnvioMasivo(sock, facturasSeleccionadas) {
+    // facturasSeleccionadas es un array de objetos de factura
+    for (const row of facturasSeleccionadas) {
         try {
-            let num = row.celular.toString().replace(/\D/g, '');
+            // LIMPIEZA DE TELÉFONO: Quitar espacios y corregir 580...
+            let num = row.celular.toString().replace(/\s/g, ''); 
+            if (num.startsWith('580')) {
+                num = '58' + num.substring(3);
+            }
             if (!num.startsWith('58')) num = '58' + num;
+            
             const jid = `${num}@s.whatsapp.net`;
-            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nFactura: *${row.nro_factura}*\nSaldo Pendiente: *$${parseFloat(row.saldo_pendiente).toFixed(2)}*\nDías vencidos: *${row.dias_transcurridos}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe recordamos que presenta un saldo pendiente.\n\nFactura: *${row.nro_factura}*\nSaldo Pendiente: *$${parseFloat(row.saldo_pendiente).toFixed(2)}*\nDías vencidos: *${row.dias_transcurridos}*.\n\nPor favor, gestione su pago a la brevedad.`;
             
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado a ${row.nombres}`);
-            await new Promise(r => setTimeout(r, 15000));
-        } catch (e) { console.log("Error en envío unitario"); }
+            console.log(`✅ Enviado a ${row.nombres} (${num})`);
+            
+            // Delay para evitar ban
+            await new Promise(r => setTimeout(r, 5000));
+        } catch (e) { 
+            console.log("Error enviando a: " + row.nombres); 
+        }
     }
 }
 
-module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas, obtenerDetalleFacturas };
+module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas };
