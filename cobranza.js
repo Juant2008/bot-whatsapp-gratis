@@ -52,30 +52,33 @@ async function obtenerListaDeudores(filtros = {}) {
 
         const [rows] = await conn.execute(sql, params);
         return rows;
-    } catch (e) { console.error(e); return []; } finally { if (conn) await conn.end(); }
+    } catch (e) { return []; } finally { if (conn) await conn.end(); }
 }
 
-async function ejecutarEnvioMasivo(sock, facturasSeleccionadas) {
-    // facturasSeleccionadas es un array de objetos de factura
-    for (const row of facturasSeleccionadas) {
+async function ejecutarEnvioMasivo(sock, facturas) {
+    for (const row of facturas) {
         try {
-            // LIMPIEZA DE TELÉFONO: Quitar espacios y corregir 580...
-            let num = row.celular.toString().replace(/\s/g, ''); 
+            // 1. Limpiar espacios y caracteres no numéricos
+            let num = row.celular.toString().replace(/\s/g, '').replace(/\D/g, '');
+            
+            // 2. Corregir formato: si empieza con 580412... -> 58412...
             if (num.startsWith('580')) {
                 num = '58' + num.substring(3);
             }
-            if (!num.startsWith('58')) num = '58' + num;
             
+            // 3. Asegurar prefijo internacional
+            if (!num.startsWith('58')) num = '58' + num;
+
             const jid = `${num}@s.whatsapp.net`;
-            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe recordamos que presenta un saldo pendiente.\n\nFactura: *${row.nro_factura}*\nSaldo Pendiente: *$${parseFloat(row.saldo_pendiente).toFixed(2)}*\nDías vencidos: *${row.dias_transcurridos}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe recordamos su factura pendiente:\n\nFactura: *${row.nro_factura}*\nSaldo: *$${parseFloat(row.saldo_pendiente).toFixed(2)}*\nDías vencidos: *${row.dias_transcurridos}*.\n\nPor favor, gestione su pago a la brevedad.`;
             
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado a ${row.nombres} (${num})`);
+            console.log(`✅ Enviado a: ${num}`);
             
-            // Delay para evitar ban
-            await new Promise(r => setTimeout(r, 5000));
-        } catch (e) { 
-            console.log("Error enviando a: " + row.nombres); 
+            // Espera de 10 segundos entre mensajes para evitar bloqueo
+            await new Promise(r => setTimeout(r, 10000));
+        } catch (e) {
+            console.log("Error enviando a una fila");
         }
     }
 }
