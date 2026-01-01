@@ -27,30 +27,31 @@ async function obtenerZonas() {
 }
 
 async function obtenerListaDeudores(filtros = {}) {
-    let connection;
+    let conn;
     try {
-        connection = await mysql.createConnection(dbConfig);
+        conn = await mysql.createConnection(dbConfig);
         const minDias = filtros.dias || 30;
         const vendedor = filtros.vendedor || '';
         const zona = filtros.zona || '';
 
         let sql = `
-            SELECT f.celular, f.nombres, f.nro_factura, f.total, f.abono_factura,
-                   (f.total - f.abono_factura) AS saldo_pendiente, f.fecha_reg,
-                   DATEDIFF(CURDATE(), f.fecha_reg) AS dias_mora
-            FROM tab_facturas f
-            WHERE f.pagada = 'NO' AND f.anulado <> 'si' AND f.id_cliente <> 334
-            AND (f.total - f.abono_factura) > 0 
-            AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?
+            SELECT celular, nombres, nro_factura, total, abono_factura,
+                   (total - abono_factura) AS saldo_pendiente,
+                   fecha_reg, vendedor as vendedor_nom, zona as zona_nom,
+                   DATEDIFF(CURDATE(), fecha_reg) AS dias_transcurridos
+            FROM tab_facturas 
+            WHERE pagada = 'NO' AND id_cliente <> 334 AND anulado <> 'si'
+            AND (total - abono_factura) > 0 
+            AND DATEDIFF(CURDATE(), fecha_reg) >= ?
         `;
         const params = [minDias];
-        if (vendedor) { sql += ` AND f.vendedor = ?`; params.push(vendedor); }
-        if (zona) { sql += ` AND f.zona = ?`; params.push(zona); }
-        sql += ` ORDER BY dias_mora DESC`;
+        if (vendedor) { sql += ` AND vendedor = ?`; params.push(vendedor); }
+        if (zona) { sql += ` AND zona = ?`; params.push(zona); }
+        sql += ` ORDER BY dias_transcurridos DESC`;
 
-        const [rows] = await connection.execute(sql, params);
+        const [rows] = await conn.execute(sql, params);
         return rows;
-    } catch (error) { return []; } finally { if (connection) await connection.end(); }
+    } catch (e) { console.error(e); return []; } finally { if (conn) await conn.end(); }
 }
 
 async function obtenerDetalleFacturas(ids) {
@@ -61,7 +62,7 @@ async function obtenerDetalleFacturas(ids) {
         const formatIds = Array.isArray(ids) ? ids : [ids];
         const placeholders = formatIds.map(() => '?').join(',');
         const [rows] = await conn.query(
-            `SELECT celular, nombres, nro_factura, (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_mora 
+            `SELECT celular, nombres, nro_factura, (total - abono_factura) as saldo_pendiente, DATEDIFF(CURDATE(), fecha_reg) as dias_transcurridos 
              FROM tab_facturas WHERE nro_factura IN (${placeholders})`,
             formatIds
         );
@@ -70,23 +71,18 @@ async function obtenerDetalleFacturas(ids) {
 }
 
 async function ejecutarEnvioMasivo(sock, deudores) {
-    if (!sock || !sock.user) return console.log("Bot no listo");
-    
+    console.log(`🚀 Iniciando envío a ${deudores.length} clientes`);
     for (const row of deudores) {
         try {
-            // LIMPIEZA QUIRÚRGICA DEL NÚMERO (Elimina espacios y corrige 580)
-            let num = row.celular.toString().replace(/\D/g, ''); 
-            if (num.startsWith('580')) num = '58' + num.substring(3);
-            else if (!num.startsWith('58')) num = '58' + num;
-            
+            let num = row.celular.toString().replace(/\D/g, '');
+            if (!num.startsWith('58')) num = '58' + num;
             const jid = `${num}@s.whatsapp.net`;
-            const saldo = parseFloat(row.saldo_pendiente).toFixed(2);
-            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe recordamos que su factura *${row.nro_factura}* presenta un *SALDO PENDIENTE de $${saldo}*.\n\nPor favor, gestione su pago a la brevedad.`;
-
+            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nFactura: *${row.nro_factura}*\nSaldo Pendiente: *$${parseFloat(row.saldo_pendiente).toFixed(2)}*\nDías vencidos: *${row.dias_transcurridos}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado a ${row.nombres} (${num})`);
+            console.log(`✅ Enviado a ${row.nombres}`);
             await new Promise(r => setTimeout(r, 15000));
-        } catch (e) { console.log("Error envío unitario"); }
+        } catch (e) { console.log("Error en envío unitario"); }
     }
 }
 
