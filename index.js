@@ -54,7 +54,7 @@ async function startBot() {
             'lista de precios': 'Saludos estimado ingrese al siguiente link para obtener nuestra lista de precios actualizada\n\nhttps://www.one4cars.com/lista_de_precios.php/',
             'tomar pedido': 'Saludos estimado ingrese al siguiente link para realizar la carga de su pedido\n\nhttps://www.one4cars.com/tomar_pedido.php/',
             'mis clientes': 'Saludos estimado ingrese al siguiente link para gestionar su cartera de clientes\n\nhttps://www.one4cars.com/mis_clientes.php/',
-            'ficha producto': 'Saludos estimado ingrese al siguiente link para consultar nuestras fichas técnicas de productos\n\nhttps://www.one4cars.com/ficha_producto.php/',
+            'ficha producto': 'Saludos estimado ingrese al siguiente link para consultar nuestras fichas técnicas de productos\n\nhttps://www.one4cars.com/consulta_productos.php/',
             'despacho': 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/despacho.php/',
             'asesor': 'Saludos estimado, en un momento uno de nuestros asesores humanos se pondrá en contacto con usted de forma manual.'
         };
