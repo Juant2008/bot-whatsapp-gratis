@@ -8,7 +8,7 @@ const cobranza = require('./cobranza');
 
 let qrCodeData = "";
 let socketBot = null;
-const port = process.env.PORT || 10000; // Variable definida correctamente
+const port = process.env.PORT || 10000;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -47,37 +47,54 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
-        // --- RESPUESTAS AUTOMÁTICAS ---
+        // --- CONFIGURACIÓN DE RESPUESTAS ---
+        // Usamos palabras en singular y minúsculas para máxima compatibilidad
+        const titulo = "🚗 *SOPORTE ONE4CARS*\n________________________\n\n";
+        
         const respuestas = {
-            'medios de pago': 'Saludos estimado ingrese al siguiente link para obtener nuestras formas de pago\n\nhttps://www.one4cars.com/medios_de_pago.php/',
-            'estado de cuenta': 'Saludos estimado ingrese al siguiente link para obtener su estado de cuenta detallado\n\nhttps://www.one4cars.com/estado_de_cuenta.php/',
-            'lista de precios': 'Saludos estimado ingrese al siguiente link para obtener nuestra lista de precios actualizada\n\nhttps://www.one4cars.com/lista_de_precios.php/',
-            'tomar pedido': 'Saludos estimado ingrese al siguiente link para realizar la carga de su pedido\n\nhttps://www.one4cars.com/tomar_pedido.php/',
-            'mis clientes': 'Saludos estimado ingrese al siguiente link para gestionar su cartera de clientes\n\nhttps://www.one4cars.com/mis_clientes.php/',
-            'Afiliar clientes': 'Saludos estimado ingrese al siguiente link para gestionar su cartera de clientes\n\nhttps://www.one4cars.com/afiliar_clientes.php/',
-            'ficha producto': 'Saludos estimado ingrese al siguiente link para consultar nuestras fichas técnicas de productos\n\nhttps://www.one4cars.com/consulta_productos.php/',
-            'despacho': 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/despacho.php/',
-            'asesor': 'Saludos estimado, en un momento uno de nuestros asesores humanos se pondrá en contacto con usted de forma manual.'
+            'medio de pago': 'Estimado cliente, acceda al siguiente enlace para ver nuestras formas de pago actualizadas:\n\n🔗 https://www.one4cars.com/medios_de_pago.php/',
+            'estado de cuenta': 'Estimado cliente, puede consultar su estado de cuenta detallado en el siguiente link:\n\n🔗 https://www.one4cars.com/estado_de_cuenta.php/',
+            'lista de precio': 'Estimado cliente, descargue nuestra lista de precios más reciente aquí:\n\n🔗 https://www.one4cars.com/lista_de_precios.php/',
+            'tomar pedido': 'Estimado cliente, inicie la carga de su pedido de forma rápida aquí:\n\n🔗 https://www.one4cars.com/tomar_pedido.php/',
+            'mis cliente': 'Estimado, gestione su cartera de clientes en el siguiente apartado:\n\n🔗 https://www.one4cars.com/mis_clientes.php/',
+            'afiliar cliente': 'Estimado, para afiliar nuevos clientes por favor ingrese al siguiente link:\n\n🔗 https://www.one4cars.com/afiliar_clientes.php/',
+            'ficha producto': 'Estimado cliente, consulte las especificaciones y fichas técnicas aquí:\n\n🔗 https://www.one4cars.com/consulta_productos.php/',
+            'despacho': 'Estimado cliente, realice el seguimiento en tiempo real de su despacho aquí:\n\n🔗 https://www.one4cars.com/despacho.php/',
+            'asesor': 'Entendido. En un momento uno de nuestros asesores humanos revisará su caso y le contactará de forma manual. Gracias por su paciencia.'
         };
 
+        // Verificación de palabras clave
+        let respondido = false;
         for (const [key, val] of Object.entries(respuestas)) {
             if (body.includes(key)) {
-                await sock.sendMessage(from, { text: val });
-                return;
+                await sock.sendMessage(from, { text: titulo + val });
+                respondido = true;
+                break; // Envía solo la primera coincidencia encontrada
             }
         }
 
-        const saludos = ['hola', 'buendia', 'buen dia', 'buen día', 'buendía', 'buenos dias', 'buenos días', 'saludos', 'buenas tardes'];
-        if (saludos.some(s => body === s || body.includes(s))) {
-            const menu = 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\n' +
-                         'Para ayudarte de forma precisa, por favor escribe la frase de la opción que necesitas:\n\n' +
-                         '🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Afiliar Cliente*\n👥 *Mis Clientes*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*';
-            await sock.sendMessage(from, { text: menu });
+        // Si no fue una palabra clave, verificar si es un saludo
+        if (!respondido) {
+            const saludos = ['hola', 'buendia', 'buen dia', 'buen día', 'buendía', 'buenos dias', 'buenos días', 'saludos', 'buenas tardes', 'buenas noches'];
+            if (saludos.some(s => body === s || body.includes(s))) {
+                const menu = '¡Hola! Bienvenido a *ONE4CARS* 🚗💨\n\n' +
+                             'Soy tu asistente virtual. Para ayudarte rápidamente, escribe la *palabra clave* de lo que necesitas:\n\n' +
+                             '🏦 *Medios de Pago*\n' +
+                             '📄 *Estado de Cuenta*\n' +
+                             '💰 *Lista de Precios*\n' +
+                             '🛒 *Tomar Pedido*\n' +
+                             '👥 *Afiliar Cliente*\n' +
+                             '👥 *Mis Clientes*\n' +
+                             '⚙️ *Ficha Producto*\n' +
+                             '🚚 *Despacho*\n' +
+                             '👤 *Asesor*';
+                await sock.sendMessage(from, { text: menu });
+            }
         }
     });
 }
 
-// SERVIDOR WEB
+// --- SERVIDOR WEB ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
