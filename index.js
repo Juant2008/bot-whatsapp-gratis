@@ -54,6 +54,7 @@ async function startBot() {
             'lista de precios': 'Saludos estimado ingrese al siguiente link para obtener nuestra lista de precios actualizada\n\nhttps://www.one4cars.com/lista_de_precios.php/',
             'tomar pedido': 'Saludos estimado ingrese al siguiente link para realizar la carga de su pedido\n\nhttps://www.one4cars.com/tomar_pedido.php/',
             'mis clientes': 'Saludos estimado ingrese al siguiente link para gestionar su cartera de clientes\n\nhttps://www.one4cars.com/mis_clientes.php/',
+            'Afiliar clientes': 'Saludos estimado ingrese al siguiente link para gestionar su cartera de clientes\n\nhttps://www.one4cars.com/afiliar_clientes.php/',
             'ficha producto': 'Saludos estimado ingrese al siguiente link para consultar nuestras fichas técnicas de productos\n\nhttps://www.one4cars.com/consulta_productos.php/',
             'despacho': 'Saludos estimado ingrese al siguiente link para realizar el seguimiento de su despacho\n\nhttps://www.one4cars.com/despacho.php/',
             'asesor': 'Saludos estimado, en un momento uno de nuestros asesores humanos se pondrá en contacto con usted de forma manual.'
@@ -70,7 +71,7 @@ async function startBot() {
         if (saludos.some(s => body === s || body.includes(s))) {
             const menu = 'Hola! Bienvenido a *ONE4CARS* 🚗. Tu asistente virtual está listo para apoyarte.\n\n' +
                          'Para ayudarte de forma precisa, por favor escribe la frase de la opción que necesitas:\n\n' +
-                         '🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Mis Clientes*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*';
+                         '🏦 *Medios de Pago*\n📄 *Estado de Cuenta*\n💰 *Lista de Precios*\n🛒 *Tomar Pedido*\n👥 *Afiliar Cliente*\n👥 *Mis Clientes*\n⚙️ *Ficha Producto*\n🚚 *Despacho*\n👤 *Asesor*';
             await sock.sendMessage(from, { text: menu });
         }
     });
