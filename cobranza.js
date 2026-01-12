@@ -34,7 +34,6 @@ async function obtenerListaDeudores(filtros = {}) {
         const vendedor = filtros.vendedor || '';
         const zona = filtros.zona || '';
 
-        // SQL actualizado con apellidos y porcentaje
         let sql = `
             SELECT celular, nombres, apellidos, nro_factura, total, abono_factura, porcentaje,
                    (total - abono_factura) AS saldo_pendiente,
@@ -59,41 +58,36 @@ async function obtenerListaDeudores(filtros = {}) {
 async function ejecutarEnvioMasivo(sock, facturas, tipoMensaje = 'atraso_nota') {
     for (const row of facturas) {
         try {
-            // 1. Cálculos de montos
             const saldoUSD = parseFloat(row.saldo_pendiente || 0);
             const tasa = parseFloat(row.porcentaje || 0);
             const saldoBS = tasa > 0 ? (saldoUSD / tasa) : 0;
             
-            // Formateo para los mensajes
             const montoUSDStr = `$${saldoUSD.toFixed(2)}`;
             const montoBSStr = `Bs. ${saldoBS.toFixed(2)}`;
             const nombreFull = `${row.nombres} ${row.apellidos || ''}`.trim();
 
-            // 2. Lógica de Privacidad (Ocultar BS a clientes específicos)
-            const clientesSinBS = []; // Agrega nombres aquí si es necesario
+            const clientesSinBS = []; 
             const mostrarBS = !clientesSinBS.includes(row.nombres);
 
-            // 3. Selección del tipo de mensaje
             let texto = "";
-            const saludo = `Saludos Cordiales, *REPUESTOS CALAMON C.A.*`;
+            const saludo = `Saludos Cordiales, ${nombreFull}.`;
 
             if (tipoMensaje === 'llegando_vencimiento') {
                 texto = `${saludo} Le Notificamos que la Nota *${row.nro_factura}* por un monto de *${montoUSDStr}*, que presenta *${row.dias_transcurridos} dias* de su emision esta próximo a llegar al limite para poder disfrutar de su Descuento, la fecha limite para pagar la factura es *23-01-2026* el descuento es del *30%* y el monto a pagar en divisas antes de esa fecha es *${montoUSDStr}*`;
                 if (mostrarBS && tasa > 0) texto += ` y en bolívares es *${montoBSStr}*`;
-                texto += `, *Aproveche y no pierda su Descuento* para el cliente ${nombreFull}.`;
+                texto += `, *Aproveche y no pierda su Descuento*.`;
             
             } else if (tipoMensaje === 'perdida_descuento') {
-                texto = `${saludo} Le Notificamos que la Nota *${row.nro_factura}* a nombre de ${nombreFull} por un monto de *${montoUSDStr}*`;
+                texto = `${saludo} Le Notificamos que la Nota *${row.nro_factura}* por un monto de *${montoUSDStr}*`;
                 if (mostrarBS && tasa > 0) texto += ` (${montoBSStr})`;
                 texto += `, esta llegando a su vencimiento Muchas Gracias por su Atenciòn.`;
             
             } else { // atraso_nota
                 texto = `${saludo} Le Notificamos que la Nota *${row.nro_factura}* por un monto de *${montoUSDStr}*`;
                 if (mostrarBS && tasa > 0) texto += ` / ${montoBSStr}`;
-                texto += `, presenta *${row.dias_transcurridos} dias* de su emision y debe ser cancelada, agradecido de antemano por colaboracion con el cliente ${nombreFull}, gracias por su Atenciòn.`;
+                texto += `, presenta *${row.dias_transcurridos} dias* de su emision y debe ser cancelada, agradecido de antemano por colaboracion, gracias por su Atenciòn.`;
             }
 
-            // 4. Limpieza de número y envío
             let num = row.celular.toString().replace(/\s/g, '').replace(/\D/g, '');
             if (num.startsWith('580')) num = '58' + num.substring(3);
             if (!num.startsWith('58')) num = '58' + num;
@@ -101,7 +95,7 @@ async function ejecutarEnvioMasivo(sock, facturas, tipoMensaje = 'atraso_nota') 
             const jid = `${num}@s.whatsapp.net`;
             
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado (${tipoMensaje}) a: ${nombreFull} (${num})`);
+            console.log(`✅ Enviado (${tipoMensaje}) a: ${nombreFull}`);
             
             await new Promise(r => setTimeout(r, 10000));
         } catch (e) {
