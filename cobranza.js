@@ -8,6 +8,8 @@ const dbConfig = {
     connectTimeout: 30000 
 };
 
+// --- FUNCIONES DE SOPORTE ---
+
 async function obtenerVendedores() {
     let conn;
     try {
@@ -26,6 +28,8 @@ async function obtenerZonas() {
     } catch (e) { return []; } finally { if (conn) await conn.end(); }
 }
 
+// --- CONSULTA PRINCIPAL ACTUALIZADA ---
+
 async function obtenerListaDeudores(filtros = {}) {
     let conn;
     try {
@@ -34,9 +38,10 @@ async function obtenerListaDeudores(filtros = {}) {
         const vendedor = filtros.vendedor || '';
         const zona = filtros.zona || '';
 
+        // Se agregaron campos: apellidos y porcentaje
         let sql = `
-            SELECT celular, nombres, nro_factura, total, abono_factura,
-                   (total - abono_factura) AS saldo_pendiente,
+            SELECT celular, nombres, apellidos, nro_factura, total, abono_factura, porcentaje,
+                   (total - abono_factura) AS saldo_usd,
                    fecha_reg, vendedor as vendedor_nom, zona as zona_nom,
                    DATEDIFF(CURDATE(), fecha_reg) AS dias_transcurridos
             FROM tab_facturas 
@@ -45,6 +50,7 @@ async function obtenerListaDeudores(filtros = {}) {
             AND (total - abono_factura) > 0 
             AND DATEDIFF(CURDATE(), fecha_reg) >= ?
         `;
+        
         const params = [minDias];
         if (vendedor) { sql += ` AND vendedor = ?`; params.push(vendedor); }
         if (zona) { sql += ` AND zona = ?`; params.push(zona); }
@@ -52,33 +58,71 @@ async function obtenerListaDeudores(filtros = {}) {
 
         const [rows] = await conn.execute(sql, params);
         return rows;
-    } catch (e) { return []; } finally { if (conn) await conn.end(); }
+    } catch (e) { 
+        console.error("Error en obtenerListaDeudores:", e);
+        return []; 
+    } finally { if (conn) await conn.end(); }
 }
 
-async function ejecutarEnvioMasivo(sock, facturas) {
+// --- GENERADOR DE MENSAJES PROFESIONALES ---
+
+function prepararMensaje(tipo, row) {
+    // Lista de clientes que no deben ver precios en bolívares (Personalización guardada)
+    const clientesSinBS = ["CLIENTE_RESTRINGIDO_1"]; 
+    const mostrarBS = !clientesSinBS.includes(row.nombres);
+
+    const saldoUSD = parseFloat(row.saldo_usd).toFixed(2);
+    // Cálculo: Saldo USD / Porcentaje
+    const saldoBS = row.porcentaje > 0 ? (row.saldo_usd / row.porcentaje).toFixed(2) : "0.00";
+    
+    const nombreFull = `${row.nombres} ${row.apellidos || ''}`.trim();
+    const firma = "\n\nSaludos Cordiales, *REPUESTOS CALAMON C.A.*";
+    const despedida = "\nMuchas Gracias por su Atención.";
+
+    switch (tipo) {
+        case 'llegando_vencimiento':
+            let msg1 = `${firma}\nLe Notificamos que la Nota *${row.nro_factura}* por un monto de *$${saldoUSD}*, que presenta *${row.dias_transcurridos} días* de su emisión está próximo a llegar al limite para poder disfrutar de su Descuento, la fecha limite para pagar la factura es *${new Date().toLocaleDateString()}* el descuento es del *30%* y el monto a pagar en divisas antes de esa fecha es *$${saldoUSD}*`;
+            if (mostrarBS) msg1 += ` y en bolívares es *Bs. ${saldoBS}*`;
+            msg1 += `.\n\n*Aproveche y no pierda su Descuento*, estimado(a) ${nombreFull}.`;
+            return msg1;
+
+        case 'perdida_descuento':
+            let msg2 = `${firma}\nLe Notificamos que la Nota *${row.nro_factura}* por un monto de *$${saldoUSD}*`;
+            if (mostrarBS) msg2 += ` (Bs. ${saldoBS})`;
+            msg2 += `, esta llegando a su vencimiento a nombre de ${nombreFull}.${despedida}`;
+            return msg2;
+
+        case 'atraso_nota':
+            let msg3 = `${firma}\nLe Notificamos que la Nota *${row.nro_factura}* por un monto de *$${saldoUSD}*`;
+            if (mostrarBS) msg3 += ` / Bs. ${saldoBS}`;
+            msg3 += `, presenta *${row.dias_transcurridos} días* de su emisión y debe ser cancelada, agradecido de antemano por colaboracion con el cliente ${nombreFull}, gracias por su Atenciòn.`;
+            return msg3;
+
+        default:
+            return `Hola ${nombreFull}, tiene la factura ${row.nro_factura} pendiente por $${saldoUSD}.`;
+    }
+}
+
+// --- ENVÍO MASIVO ---
+
+async function ejecutarEnvioMasivo(sock, facturas, tipoMensaje = 'atraso_nota') {
     for (const row of facturas) {
         try {
-            // 1. Limpiar espacios y caracteres no numéricos
+            // Limpieza de número celular
             let num = row.celular.toString().replace(/\s/g, '').replace(/\D/g, '');
-            
-            // 2. Corregir formato: si empieza con 580412... -> 58412...
-            if (num.startsWith('580')) {
-                num = '58' + num.substring(3);
-            }
-            
-            // 3. Asegurar prefijo internacional
+            if (num.startsWith('580')) num = '58' + num.substring(3);
             if (!num.startsWith('58')) num = '58' + num;
 
             const jid = `${num}@s.whatsapp.net`;
-            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe recordamos su factura pendiente:\n\nFactura: *${row.nro_factura}*\nSaldo: *$${parseFloat(row.saldo_pendiente).toFixed(2)}*\nDías vencidos: *${row.dias_transcurridos}*.\n\nPor favor, gestione su pago a la brevedad.`;
+            const texto = prepararMensaje(tipoMensaje, row);
             
             await sock.sendMessage(jid, { text: texto });
-            console.log(`✅ Enviado a: ${num}`);
+            console.log(`✅ Enviado (${tipoMensaje}) a: ${row.nombres} - ${num}`);
             
-            // Espera de 10 segundos entre mensajes para evitar bloqueo
+            // Pausa de 10 segundos para evitar spam
             await new Promise(r => setTimeout(r, 10000));
         } catch (e) {
-            console.log("Error enviando a una fila");
+            console.log(`❌ Error enviando factura ${row.nro_factura}:`, e.message);
         }
     }
 }
