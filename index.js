@@ -52,7 +52,7 @@ async function startBot() {
         const titulo = "🚗 *SOPORTE ONE4CARS*\n________________________\n\n";
         
         const respuestas = {
-            'medio de pago': 'Estimado cliente, acceda al siguiente enlace para ver nuestras formas de pago actualizadas:\n\n🔗 https://www.one4cars.com/medios_de_pago.php/',
+            'medios de pago': 'Estimado cliente, acceda al siguiente enlace para ver nuestras formas de pago actualizadas:\n\n🔗 https://www.one4cars.com/medios_de_pago.php/',
             'estado de cuenta': 'Estimado cliente, puede consultar su estado de cuenta detallado en el siguiente link:\n\n🔗 https://www.one4cars.com/estado_de_cuenta.php/',
             'lista de precio': 'Estimado cliente, descargue nuestra lista de precios más reciente aquí:\n\n🔗 https://www.one4cars.com/lista_de_precios.php/',
             'tomar pedido': 'Estimado cliente, inicie la carga de su pedido de forma rápida aquí:\n\n🔗 https://www.one4cars.com/tomar_pedido.php/',
