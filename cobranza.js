@@ -79,7 +79,7 @@ async function ejecutarEnvioMasivo(sock, facturas) {
             if (excluirBolivares.includes(row.nombres)) {
                 saldoTexto = `Saldo: *Ref. ${parseFloat(row.saldo_pendiente).toFixed(2)}*`;
             } else {
-                saldoTexto = `Saldo: *Bs. ${parseFloat(row.saldo_bolivares).toFixed(2)}*`;
+                saldoTexto = `Saldo: *$. ${parseFloat(row.saldo_bolivares).toFixed(2)}*`;
             }
 
             const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe Notificamos que su Nota está pendiente:\n\nFactura: *${row.nro_factura}*\n${saldoTexto}\nPresenta: *${row.dias_transcurridos} días vencidos*\n\nPor favor, gestione su pago a la brevedad. Cuide su crédito, es valioso.`;
