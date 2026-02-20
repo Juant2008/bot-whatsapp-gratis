@@ -48,7 +48,6 @@ async function startBot() {
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
         // --- CONFIGURACIÓN DE RESPUESTAS ---
-        // Usamos palabras en singular y minúsculas para máxima compatibilidad
         const titulo = "🚗 *SOPORTE ONE4CARS*\n________________________\n\n";
         
         const respuestas = {
@@ -63,17 +62,15 @@ async function startBot() {
             'asesor': 'Entendido. En un momento uno de nuestros asesores humanos revisará su caso y le contactará de forma manual. Gracias por su paciencia.'
         };
 
-        // Verificación de palabras clave
         let respondido = false;
         for (const [key, val] of Object.entries(respuestas)) {
             if (body.includes(key)) {
                 await sock.sendMessage(from, { text: titulo + val });
                 respondido = true;
-                break; // Envía solo la primera coincidencia encontrada
+                break;
             }
         }
 
-        // Si no fue una palabra clave, verificar si es un saludo
         if (!respondido) {
             const saludos = ['hola', 'buendia', 'buen dia', 'buen día', 'buendía', 'buenos dias', 'buenos días', 'saludos', 'buenas tardes', 'buenas noches'];
             if (saludos.some(s => body === s || body.includes(s))) {
@@ -94,7 +91,6 @@ async function startBot() {
     });
 }
 
-// --- SERVIDOR WEB ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
@@ -218,6 +214,26 @@ http.createServer(async (req, res) => {
             } catch(e) { res.writeHead(500); res.end('Error interno'); }
         });
     }
+    // --- NUEVA RUTA AGREGADA PARA PAGOS ---
+    else if (path === '/enviar-pago' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', async () => {
+            try {
+                const data = JSON.parse(body);
+                if (socketBot && data.telefono && data.mensaje) {
+                    let num = data.telefono.replace(/\D/g, '');
+                    if (!num.startsWith('58')) num = '58' + num;
+                    const jid = `${num}@s.whatsapp.net`;
+                    await socketBot.sendMessage(jid, { text: data.mensaje });
+                    res.writeHead(200); res.end('OK');
+                } else {
+                    res.writeHead(400); res.end('Faltan datos');
+                }
+            } catch(e) { res.writeHead(500); res.end('Error'); }
+        });
+    }
+    // --- FIN NUEVA RUTA ---
     else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (qrCodeData.includes("data:image")) {
