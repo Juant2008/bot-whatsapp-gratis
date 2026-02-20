@@ -47,7 +47,7 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
 
-        // --- CONFIGURACIÓN DE RESPUESTAS ---
+        // --- CONFIGURACIÓN DE RESPUESTAS (MENÚ ORIGINAL) ---
         const titulo = "🚗 *SOPORTE ONE4CARS*\n________________________\n\n";
         
         const respuestas = {
@@ -91,6 +91,7 @@ async function startBot() {
     });
 }
 
+// --- SERVIDOR HTTP (COBRANZA + QR + NOTIFICACIONES DE PAGO) ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
@@ -214,7 +215,7 @@ http.createServer(async (req, res) => {
             } catch(e) { res.writeHead(500); res.end('Error interno'); }
         });
     }
-    // --- NUEVA RUTA AGREGADA PARA PAGOS ---
+    // --- RUTA PARA LOS PAGOS AUTOMÁTICOS DESDE HOSTGATOR ---
     else if (path === '/enviar-pago' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
@@ -233,7 +234,6 @@ http.createServer(async (req, res) => {
             } catch(e) { res.writeHead(500); res.end('Error'); }
         });
     }
-    // --- FIN NUEVA RUTA ---
     else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (qrCodeData.includes("data:image")) {
