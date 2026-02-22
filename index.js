@@ -8,8 +8,7 @@ const cron = require('node-cron');
 const mysql = require('mysql2/promise');
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN ---
-const genAI = new GoogleGenerativeAI("TU_API_KEY_AQUI"); // <--- REEMPLAZA ESTO
+const genAI = new GoogleGenerativeAI("TU_API_KEY_AQUI"); 
 const dbConfig = {
     host: 'one4cars.com',
     user: 'juant200_one4car',
@@ -27,7 +26,6 @@ REGLAS:
 2. "No tengo dinero": Empatía y pedir fecha de abono.
 3. Si prometen fecha de pago, di "Entendido, lo agendo para seguimiento".`;
 
-// --- WHATSAPP LOGIC ---
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     socketBot = makeWASocket({ 
@@ -42,11 +40,10 @@ async function startBot() {
         const { connection, lastDisconnect, qr } = u;
         if (qr) {
             qrCodeData = await qrcode.toDataURL(qr);
-            console.log("QR Generado satisfactoriamente.");
         }
         if (connection === 'open') {
             qrCodeData = "ONLINE";
-            console.log('✅ CONECTADO EXITOSAMENTE');
+            console.log('✅ CONECTADO');
         }
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -76,7 +73,6 @@ async function startBot() {
     });
 }
 
-// --- SERVIDOR WEB ---
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname.replace(/\/+$/, "") || "/";
@@ -85,68 +81,24 @@ const server = http.createServer(async (req, res) => {
         try {
             const data = await cobranza.obtenerListaDeudores(parsedUrl.query);
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            let html = `<html><head><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"></head><body class="container mt-4">`;
-            html += `<h2>Panel de Cobranza ONE4CARS</h2><table class="table table-striped"><thead><tr><th>Cliente</th><th>Factura</th><th>Saldo $</th></tr></thead><tbody>`;
-            data.forEach(r => {
-                html += `<tr><td>${r.nombres}</td><td>${r.nro_factura}</td><td>${parseFloat(r.saldo_pendiente || 0).toFixed(2)}</td></tr>`;
-            });
-            html += `</tbody></table></body></html>`;
-            res.end(html);
+            let tableRows = data.map(r => `<tr><td>${r.nombres}</td><td>${r.nro_factura}</td><td>${parseFloat(r.saldo_pendiente || 0).toFixed(2)}</td></tr>`).join('');
+            res.end(`<html><head><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"></head><body class="container mt-4"><h2>Cobranza</h2><table class="table table-striped"><thead><tr><th>Cliente</th><th>Factura</th><th>Saldo $</th></tr></thead><tbody>${tableRows}</tbody></table></body></html>`);
         } catch (e) {
-            res.end("Error cargando cobranza: " + e.message);
+            res.end("Error: " + e.message);
         }
     } else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (qrCodeData === "ONLINE") {
-            res.end("<center><h1>ONE4CARS AI</h1><h2 style='color:green'>✅ CONECTADO</h2><br><a href='/cobranza'>Ver Cobranza</a></center>");
+            res.end("<center><h1>ONE4CARS AI ✅</h1><br><a href='/cobranza'>Ver Cobranza</a></center>");
         } else if (qrCodeData) {
-            res.end(`<center><h1>ONE4CARS AI</h1><p>Escanea para activar:</p><img src="${qrCodeData}" width="300"></center>`);
+            res.end(`<center><h1>ONE4CARS AI</h1><img src="${qrCodeData}" width="300"></center>`);
         } else {
-            res.end("<center><h1>ONE4CARS AI</h1><p>Iniciando socket... Refresca en 5 segundos.</p></center>");
+            res.end("<center><h1>ONE4CARS AI</h1><p>Cargando... Refresca.</p></center>");
         }
     }
 });
 
 server.listen(port, '0.0.0.0', () => {
-    console.log(`Servidor ONE4CARS activo en puerto ${port}`);
-    startBot();
-});                                <td>${r.nro_factura}</td>
-                                <td>${parseFloat(r.saldo_pendiente || 0).toFixed(2)}</td>
-                                <td>${r.dias_transcurridos || 0}</td>
-                            </tr>`;
-            });
-
-            html += `
-                        </tbody>
-                    </table>
-                </body>
-            </html>`;
-            res.end(html);
-        } catch (error) {
-            console.error("Error en tabla:", error);
-            res.writeHead(500);
-            res.end("Error interno al cargar deudores");
-        }
-    } 
-    // Ruta principal (donde sale el QR)
-    else if (path === "" || path === "/") {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        if (qrCodeData === "ONLINE") {
-            res.end("<center><h1>ONE4CARS AI</h1><h2 style='color:green'>✅ SISTEMA CONECTADO</h2><br><a href='/cobranza' class='btn btn-primary'>Ver Cobranza</a></center>");
-        } else if (qrCodeData) {
-            res.end(`<center><h1>ONE4CARS AI</h1><p>Escanea para activar:</p><img src="${qrCodeData}" width="300"></center>`);
-        } else {
-            res.end("<center><h1>ONE4CARS AI</h1><p>Iniciando... Refresca en 5 segundos.</p></center>");
-        }
-    } 
-    // Si no es ninguna de las anteriores
-    else {
-        res.writeHead(404);
-        res.end("Ruta no encontrada. Intenta con / o /cobranza");
-    }
-});
-
-server.listen(port, '0.0.0.0', () => {
-    console.log(`Servidor ONE4CARS corriendo en puerto ${port}`);
+    console.log(`Servidor en puerto ${port}`);
     startBot();
 });
