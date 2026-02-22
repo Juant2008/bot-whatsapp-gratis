@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay } = require('@whiskeysockets/baileys');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const qrcode = require('qrcode');
 const http = require('http');
@@ -21,44 +21,62 @@ let qrCodeData = "";
 let botStatus = "INICIALIZANDO...";
 const port = process.env.PORT || 10000;
 
-// --- ENTRENAMIENTO COMPLETO ONE4CARS ---
-const SYSTEM_PROMPT = `Eres el asistente experto de ONE4CARS. 
-EMPRESA: Importadora de autopartes desde China para Venezuela. 
-ALMACENES: General (bultos) e Intermedio (stock detallado).
-
-REGLAS DE NEGOCIO Y LINKS:
-1. Consulta de Productos: Siempre que pregunten precios o existencias, envía este link: https://www.one4cars.com/consulta_productos.php/
-2. Pagos: Si preguntan dónde pagar o reportar, usa la web oficial.
-3. Dólar/Precios: Si dicen que está caro, explica que somos importadores directos y protegemos su inversión con precios competitivos en divisas.
-4. Cobranza: Si el cliente da una fecha de pago, responde: "Entendido, lo agendo para seguimiento".
-5. Atención: Sé profesional, usa "Estimado" o "Amigo".`;
+// --- ENTRENAMIENTO COMPLETO Y DETALLADO (RESTAURADO) ---
+const SYSTEM_PROMPT = `Eres Gemini, el asistente oficial de ONE4CARS. 
+MODELO DE NEGOCIO: Empresa importadora de autopartes desde China hacia Venezuela.
+ESTRUCTURA FÍSICA: 
+- Almacén General: Se guardan los bultos cerrados de mercancía.
+- Almacén Intermedio: Se abren bultos y se mantiene el stock para despacho inmediato.
+ESTRUCTURA DE DATOS (SQL):
+- Clientes: tab_clientes | Vendedores: tab_vendedores (10 vendedores aprox).
+- Facturación: tab_facturas (cabecera: nro_factura, monto, estatus pagada SI/NO) y tab_facturas_reng (detalles).
+- Web Remota: Maneja tab_pedidos y tab_pagos.
+- Compras: tab_proveedores_facturas y tab_cotizaciones (China).
+REGLAS DE RESPUESTA:
+1. CONSULTA PRODUCTOS: https://www.one4cars.com/consulta_productos.php/
+2. OBJECIÓN DÓLAR: Explica que somos importadores directos, precios en divisas protegen la reposición de stock.
+3. COBRANZA: Si el cliente da fecha de pago o promete abonar, responde: "Entendido, lo agendo para seguimiento".
+4. ESTATUS: Si preguntan por facturas, decir que el asesor de zona validará el estatus en tab_facturas.`;
 
 // --- LÓGICA DEL BOT ---
 async function startBot() {
+    // La carpeta 'auth_info' guarda la sesión. 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     
     socketBot = makeWASocket({ 
         auth: state, 
         logger: pino({ level: 'error' }),
-        browser: ["ONE4CARS", "Chrome", "1.0.0"]
+        browser: ["ONE4CARS", "Chrome", "1.0.0"],
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 10000
     });
     
     socketBot.ev.on('creds.update', saveCreds);
 
     socketBot.ev.on('connection.update', async (u) => {
         const { connection, lastDisconnect, qr } = u;
+        
         if (qr) {
-            botStatus = "ESPERANDO ESCANEO";
+            botStatus = "LISTO PARA ESCANEAR";
             qrCodeData = await qrcode.toDataURL(qr);
         }
+
         if (connection === 'open') {
             botStatus = "CONECTADO";
             qrCodeData = "ONLINE";
         }
+
         if (connection === 'close') {
-            botStatus = "RECONECTANDO";
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startBot();
+            const statusCode = (lastDisconnect.error)?.output?.statusCode;
+            botStatus = "RECONECTANDO...";
+            
+            // Si la sesión es inválida, forzamos reinicio total
+            if (statusCode === DisconnectReason.loggedOut) {
+                botStatus = "SESIÓN CERRADA - ESCANEE DE NUEVO";
+            } else {
+                setTimeout(startBot, 5000); // Reintento en 5 seg
+            }
         }
     });
 
@@ -75,8 +93,8 @@ async function startBot() {
             const resp = result.response.text();
             await socketBot.sendMessage(from, { text: resp });
 
-            // Registro en tab_agenda_seguimiento
-            if (resp.toLowerCase().includes("agendo") || body.match(/\b(lunes|martes|miercoles|jueves|viernes|pago el)\b/)) {
+            // REGISTRO AUTOMÁTICO DE COMPROMISOS
+            if (resp.toLowerCase().includes("agendo") || body.match(/\b(lunes|martes|miercoles|jueves|viernes|sabado|pago el|pagaré)\b/)) {
                 const conn = await mysql.createConnection(dbConfig);
                 await conn.execute("INSERT INTO tab_agenda_seguimiento (id_cliente, tipo_evento, respuesta_cliente, comentario_bot) SELECT id_cliente, 'COMPROMISO', ?, ? FROM tab_clientes WHERE celular LIKE ?", [body, resp, `%${numLimpio}%`]);
                 await conn.end();
@@ -94,26 +112,24 @@ const server = http.createServer(async (req, res) => {
         try {
             const data = await cobranza.obtenerListaDeudores(parsedUrl.query);
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            let rows = data.map(r => `<tr><td>${r.nombres}</td><td>${r.nro_factura}</td><td>$${parseFloat(r.saldo_pendiente || 0).toFixed(2)}</td></tr>`).join('');
-            res.end(`<html><head><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"></head><body class="p-4"><h2>Lista de Cobranza</h2><table class="table table-striped"><thead><tr><th>Cliente</th><th>Factura</th><th>Saldo</th></tr></thead><tbody>${rows}</tbody></table><br><a href="/" class="btn btn-secondary">Volver al Inicio</a></body></html>`);
-        } catch (e) { res.end("Error de conexión a la base de datos."); }
+            let rows = data.map(r => `<tr><td>${r.nombres}</td><td>${r.nro_factura}</td><td>$${parseFloat(r.saldo_pendiente || 0).toFixed(2)}</td><td>${r.dias_transcurridos}</td></tr>`).join('');
+            res.end(`<html><head><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"></head><body class="container p-4"><h2>Gestión de Cobranza ONE4CARS</h2><table class="table table-dark table-striped"><thead><tr><th>Cliente</th><th>Factura</th><th>Saldo</th><th>Días</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+        } catch (e) { res.end("Error conectando a tab_facturas: " + e.message); }
     } else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        let htmlContent = "";
-        
+        let visual = "";
         if (qrCodeData === "ONLINE") {
-            htmlContent = "<h1 style='color:green'>✅ SISTEMA CONECTADO</h1><p>ONE4CARS AI está activo.</p><br><a href='/cobranza' style='padding:10px; background:blue; color:white; text-decoration:none; border-radius:5px;'>Ver Panel de Cobranza</a>";
+            visual = "<h1 style='color:green'>✅ BOT ONE4CARS EN LÍNEA</h1><br><a href='/cobranza' class='btn btn-primary'>Ver Deudores</a>";
         } else if (qrCodeData) {
-            htmlContent = `<h1>ONE4CARS AI</h1><p>Escanea este código para activar el bot:</p><img src="${qrCodeData}" width="300"><br><p>Estado: <b>${botStatus}</b></p>`;
+            visual = `<h1>ONE4CARS AI</h1><p>Escanea el código para activar el sistema:</p><img src="${qrCodeData}" width="350" style="border: 15px solid white; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.2);">`;
         } else {
-            htmlContent = `<h1>ONE4CARS AI</h1><p>Iniciando conexión con WhatsApp...</p><p>Estado: <b>${botStatus}</b></p><p>La página se refrescará sola cada 10 segundos.</p>`;
+            visual = `<h1>ONE4CARS AI</h1><div class="spinner-border text-primary"></div><p>Estado: <b>${botStatus}</b></p><p>Si tarda mucho, refresque la página.</p>`;
         }
-        
-        res.end(`<html><head><meta http-equiv="refresh" content="10"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"></head><body class="text-center p-5">${htmlContent}</body></html>`);
+        res.end(`<html><head><meta http-equiv="refresh" content="10"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"></head><body class="text-center mt-5">${visual}</body></html>`);
     }
 });
 
 server.listen(port, '0.0.0.0', () => {
-    console.log(`Servidor ONE4CARS en puerto ${port}`);
+    console.log(`Servidor ONE4CARS desplegado en puerto ${port}`);
     startBot();
 });
