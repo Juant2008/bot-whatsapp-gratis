@@ -9,12 +9,12 @@ const cobranza = require('./cobranza');
 
 // --- CONFIGURACIÓN ONE4CARS ---
 // REEMPLAZA ESTO CON TU API KEY REAL DE GOOGLE AI STUDIO
-const API_KEY_IA = "TU_API_KEY_AQUI"; 
+const API_KEY_IA = "AIzaSyBKfvF9FOU84Bg_FDJeDZs5kSKu-lwnVwM"; 
 const genAI = new GoogleGenerativeAI(API_KEY_IA);
 const modelIA = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 const dbConfig = {
-    host: 'one4cars.com',
+    host: 'localhost',
     user: 'juant200_one4car',
     password: 'Notieneclave1*',
     database: 'juant200_venezon',
@@ -129,7 +129,7 @@ async function startBot() {
         const contexto = await obtenerContextoBD(body, from.split('@')[0]);
         const prompt = `Eres el asistente de ONE4CARS. INFO: ${contexto}. 
         Responde amablemente. Si no sabes algo o la base de datos falló, invita a escribir 'Asesor'. 
-        Si el cliente saluda, muestra las opciones disponibles: Medios de pago, Estado de cuenta, Pedidos.`;
+        Si el cliente saluda, muestra todas las opciones disponibles: Medios de pago, Afiliar Cliente, Tomar Pedidos, Estado de cuenta, Pedidos, stc, muestralas todas`;
 
         try {
             const result = await modelIA.generateContent(`${prompt}\nUsuario dice: ${body}`);
