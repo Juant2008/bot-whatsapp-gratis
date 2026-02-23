@@ -13,7 +13,7 @@ const cobranza = require('./cobranza');
 // --- CONFIGURACIÓN GEMINI ---
 // Asegúrate de tener la variable de entorno GEMINI_API_KEY
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "AIzaSyBKfvF9FOU84Bg_FDJeDZs5kSKu-lwnVwM");
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
 // --- PROMPT MAESTRO ---
 const SYSTEM_INSTRUCTION = `
