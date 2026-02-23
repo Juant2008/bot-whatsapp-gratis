@@ -1,7 +1,7 @@
 {
   "name": "one4cars-bot-final-pro",
   "version": "4.0.0",
-  "description": "Bot de WhatsApp con Gemini para ONE4CARS Venezuela",
+  "description": "Bot de WhatsApp con Gemini 2.0 para ONE4CARS Venezuela",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -14,7 +14,10 @@
     "node-cron": "^3.0.3",
     "qrcode": "^1.5.3",
     "pino": "^8.19.0",
-    "mongoose": "^7.0.0",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "mongoose": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
