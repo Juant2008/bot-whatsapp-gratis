@@ -90,7 +90,9 @@ async function startBot() {
             console.error("ERROR REAL EN GEMINI:", error.message);
             
             // Mensaje de respaldo con los 9 enlaces obligatorios formateados correctamente
-            const menuManual = `¡Hola! Estamos actualizando mi cerebro de IA, pero aquí tienes nuestras opciones directas:
+            const menuManual = `¡Hola! Bienvenido a ONE4CARS 🚗💨
+
+Soy tu asistente virtual. Para ayudarte rápidamente, escribe la palabra clave de lo que necesitas:
 
 🏦 *Medios de Pago:* https://www.one4cars.com/medios_de_pago.php/
 📄 *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
