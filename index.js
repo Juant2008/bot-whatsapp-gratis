@@ -2,19 +2,17 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
-const url = require('url');
 const pino = require('pino');
 const mysql = require('mysql2/promise');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
 // --- CONFIGURACIÓN ONE4CARS ---
-const API_KEY_GEMINI = "TU_API_KEY_AQUI"; // Reemplaza con tu llave de Google AI Studio
-const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const genAI = new GoogleGenerativeAI("AIzaSyBKfvF9FOU84Bg_FDJeDZs5kSKu-lwnVwM"); // <--- DEBES PONER TU LLAVE AQUÍ
+const modelIA = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 const dbConfig = {
-    host: 'one4cars.com',
+    host: 'localhost',
     user: 'juant200_one4car',
     password: 'Notieneclave1*',
     database: 'juant200_venezon'
@@ -22,55 +20,67 @@ const dbConfig = {
 
 let qrCodeData = "";
 let socketBot = null;
-const port = process.env.PORT || 10000;
 
-// --- FUNCIONES DE CONSULTA REAL SQL ---
-async function obtenerContextoBD(texto, numeroWhatsApp) {
+// --- LÓGICA DE CONSULTA SEGURA (CLIENTES Y VENDEDORES) ---
+async function obtenerContextoInteligente(texto, numeroWhatsApp) {
     const conn = await mysql.createConnection(dbConfig);
-    let datosExtra = "Información actual de ONE4CARS: ";
-    
-    try {
-        const busqueda = texto.toLowerCase();
+    let contexto = "Información de ONE4CARS: ";
+    const tlf = numeroWhatsApp.replace(/\D/g, '').slice(-10); // Toma los últimos 10 dígitos
 
-        // 1. Lógica de Saldo / Deuda
-        if (busqueda.includes("saldo") || busqueda.includes("debo") || busqueda.includes("cuenta")) {
-            const [rows] = await conn.execute(
-                `SELECT c.nombres, SUM(f.monto - f.abono_factura) as deuda 
-                 FROM tab_cliente c 
-                 JOIN tab_facturas f ON c.id_cliente = f.id_cliente 
-                 WHERE f.pagada = 'NO' AND (c.telefono LIKE ? OR c.cedula LIKE ?)
-                 GROUP BY c.id_cliente`, [`%${numeroWhatsApp.substring(2)}%`, `%${busqueda.match(/\d+/)}%`]
-            );
-            if (rows.length > 0) {
-                datosExtra += `El cliente ${rows[0].nombres} tiene una deuda de $${rows[0].deuda}. `;
+    try {
+        // 1. VERIFICAR SI ES VENDEDOR
+        const [vendedor] = await conn.execute("SELECT id_vendedor, nombre FROM tab_vendedores WHERE telefono LIKE ?", [`%${tlf}%`]);
+        
+        if (vendedor.length > 0) {
+            const v = vendedor[0];
+            contexto += `El usuario es el VENDEDOR ${v.nombre}. Tiene permiso para ver sus clientes. `;
+            
+            if (texto.includes("saldo") || texto.includes("cobranza")) {
+                const [deudas] = await conn.execute(
+                    "SELECT c.nombres, SUM(f.monto - f.abono_factura) as total FROM tab_cliente c JOIN tab_facturas f ON c.id_cliente = f.id_cliente WHERE c.id_vendedor = ? AND f.pagada = 'NO' GROUP BY c.id_cliente LIMIT 5",
+                    [v.id_vendedor]
+                );
+                contexto += `Sus clientes con más deuda son: ${deudas.map(d => `${d.nombres} ($${d.total})`).join(", ")}. `;
+            }
+        } else {
+            // 2. VERIFICAR SI ES CLIENTE
+            const [cliente] = await conn.execute("SELECT id_cliente, nombres FROM tab_cliente WHERE telefono LIKE ?", [`%${tlf}%`]);
+            if (cliente.length > 0) {
+                const c = cliente[0];
+                contexto += `El usuario es el CLIENTE ${c.nombres}. `;
+                if (texto.includes("saldo") || texto.includes("debo")) {
+                    const [facturas] = await conn.execute(
+                        "SELECT SUM(monto - abono_factura) as deuda FROM tab_facturas WHERE id_cliente = ? AND pagada = 'NO'",
+                        [c.id_cliente]
+                    );
+                    contexto += `Su deuda actual es de $${facturas[0].deuda || 0}. `;
+                }
             }
         }
 
-        // 2. Lógica de Productos (Búsqueda LIKE en descripción)
-        if (busqueda.includes("precio") || busqueda.includes("tienes") || busqueda.includes("hay")) {
-            const item = busqueda.replace(/precio|tienes|hay|de/g, "").trim();
+        // 3. BUSQUEDA DE PRODUCTOS (SIEMPRE DISPONIBLE)
+        if (texto.includes("precio") || texto.includes("tienes") || texto.includes("hay")) {
+            const busqueda = texto.replace(/precio|tienes|hay|de|un|una/g, "").trim();
             const [prod] = await conn.execute(
                 "SELECT descripcion, precio, cantidad_existencia FROM tab_productos WHERE descripcion LIKE ? LIMIT 3",
-                [`%${item}%`]
+                [`%${busqueda}%`]
             );
             if (prod.length > 0) {
-                datosExtra += "Resultados de inventario: " + prod.map(p => `${p.descripcion} ($${p.precio}, stock: ${p.cantidad_existencia})`).join(", ");
+                contexto += `En inventario: ${prod.map(p => `${p.descripcion} ($${p.precio})`).join(", ")}. `;
             }
         }
-    } catch (e) { console.error("Error BD:", e); }
-    finally { await conn.end(); }
-    return datosExtra;
+    } catch (e) {
+        console.error("Error BD:", e);
+    } finally {
+        await conn.end();
+    }
+    return contexto;
 }
 
-// --- MOTOR DEL BOT ---
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    const { version } = await fetchLatestBaileysVersion();
-
     const sock = makeWASocket({
-        version,
         auth: state,
-        printQRInTerminal: false,
         logger: pino({ level: 'error' }),
         browser: ["ONE4CARS", "Chrome", "1.0.0"]
     });
@@ -83,8 +93,8 @@ async function startBot() {
         if (qr) qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
         if (connection === 'open') qrCodeData = "BOT ONLINE ✅";
         if (connection === 'close') {
-            const code = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
-            if (code !== DisconnectReason.loggedOut) startBot();
+            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) startBot();
         }
     });
 
@@ -94,61 +104,45 @@ async function startBot() {
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
-        const senderNumber = from.split('@')[0];
-        const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+        const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
 
-        // Obtener datos de la BD para alimentar a la IA
-        const contextoBD = await obtenerContextoBD(body, senderNumber);
+        // Obtener contexto de SQL
+        const contextoReal = await obtenerContextoInteligente(body, from.split('@')[0]);
 
-        // Entrenamiento dinámico para Gemini
-        const promptSystem = `
-        Eres el asistente inteligente de ONE4CARS (Venezuela). 
-        CONTEXTO DEL SISTEMA: ${contextoBD}.
-        REGLAS:
-        1. Responde en lenguaje natural, amable y profesional.
-        2. Si el contexto tiene datos de deuda o productos, úsalos para responder con precisión.
-        3. Si no hay datos, ofrece el menú: Medios de Pago, Estado de Cuenta, Lista de Precios, Tomar Pedido.
-        4. Enlaces oficiales: 
-           - Medios de Pago: https://www.one4cars.com/medios_de_pago.php
-           - Pedidos: https://www.one4cars.com/tomar_pedido.php
-        5. No inventes precios si no están en el contexto.
+        // Prompt para la IA
+        const instruccion = `
+            Eres el asistente inteligente de ONE4CARS.
+            INFO REAL DEL SISTEMA: ${contextoReal}.
+            
+            REGLAS DE ORO:
+            1. Saluda cordialmente.
+            2. Si es VENDEDOR, dale detalles de sus clientes.
+            3. Si es CLIENTE, dile su deuda personal.
+            4. Si pregunta por productos, usa los precios de la INFO REAL.
+            5. Si no hay info real para su duda, dile: "No tengo el dato exacto, pero puedes ver aquí: https://www.one4cars.com/estado_de_cuenta.php".
+            6. Sé breve, humano y usa emojis de autos.
         `;
 
         try {
-            const result = await model.generateContent(`${promptSystem}\nCliente dice: ${body}`);
-            const responseText = result.response.text();
-            await sock.sendMessage(from, { text: responseText });
+            const result = await modelIA.generateContent(`${instruccion}\nPregunta: ${body}`);
+            await sock.sendMessage(from, { text: result.response.text() });
         } catch (err) {
-            await sock.sendMessage(from, { text: "Hola! Estamos actualizando el sistema. Por favor intenta en un momento o escribe 'Asesor'." });
+            console.error(err);
+            await sock.sendMessage(from, { text: "⚠️ Error de conexión con la IA. Por favor, escribe 'Asesor' para hablar con un humano." });
         }
     });
 }
 
-// --- SERVIDOR WEB (SIMULANDO PHP HEADER) ---
+// SERVIDOR HTTP CON HEADER PHP SIMULADO
 http.createServer(async (req, res) => {
-    const parsedUrl = url.parse(req.url, true);
-    if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
-        // ... (Lógica de cobranza masiva que ya tenías)
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    const header = `<div style="background:#000;color:#fff;padding:20px;text-align:center;"><img src="https://one4cars.com/logo.png" width="150"><h1>ONE4CARS AI CONTROL</h1></div>`;
+    
+    if (qrCodeData.includes("data:image")) {
+        res.end(`${header}<center><h2>Escanea el QR</h2><img src="${qrCodeData}"></center>`);
     } else {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        // Simulación de include/header.php
-        res.write(`
-            <div style="font-family:sans-serif; background:#f4f4f4; min-height:100vh;">
-                <div style="background:#000; color:#fff; padding:20px; text-align:center;">
-                    <img src="https://one4cars.com/logo.png" style="width:180px;"><br>
-                    <h1>ONE4CARS - Panel de Control Bot</h1>
-                </div>
-                <div style="padding:40px; text-align:center;">
-                    ${qrCodeData.includes("data:image") 
-                        ? `<h2>Escanea el QR para Vincular</h2><img src="${qrCodeData}" style="border:10px solid #fff; box-shadow:0 0 10px rgba(0,0,0,0.1);">` 
-                        : `<h2 style="color:green;">${qrCodeData || "Iniciando..."}</h2><br>
-                           <a href="/cobranza" style="display:inline-block; padding:15px 30px; background:#28a745; color:#fff; text-decoration:none; border-radius:5px; font-weight:bold;">IR A COBRANZA</a>`
-                    }
-                </div>
-            </div>
-        `);
-        res.end();
+        res.end(`${header}<center><h2>${qrCodeData || "Iniciando..."}</h2><br><a href="/cobranza" style="padding:15px;background:green;color:#fff;text-decoration:none;">PANEL COBRANZA</a></center>`);
     }
-}).listen(port);
+}).listen(process.env.PORT || 10000);
 
 startBot();
