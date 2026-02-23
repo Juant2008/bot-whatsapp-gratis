@@ -9,15 +9,8 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
 // --- CONFIGURACIÓN GEMINI ---
-// Validamos que exista la API KEY para evitar errores de conexión
-if (!process.env.GEMINI_API_KEY) {
-    console.error("❌ ERROR: La variable GEMINI_API_KEY no está definida en el .env");
-    process.exit(1);
-}
-
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// --- PROMPT MAESTRO (Configurado como System Instruction) ---
 const SYSTEM_INSTRUCTION = `
 Eres el "Asistente Virtual Experto de ONE4CARS", la empresa líder importadora de autopartes desde China en Venezuela. Tu tono es profesional, amable, eficiente y con un lenguaje venezolano cordial ("Estimado cliente", "Estamos a su orden"). Eres un vendedor experto que conoce el catálogo de www.one4cars.com de memoria.
 
@@ -47,7 +40,6 @@ Debes ofrecer y manejar estos enlaces según el contexto del usuario:
 REGLA DE ORO: No inventar precios. Si no hay stock o el dato es incierto, remitir al Asesor Humano.
 `;
 
-// Inicialización del modelo con la instrucción de sistema integrada para evitar el error 404
 const model = genAI.getGenerativeModel({ 
     model: "gemini-1.5-flash",
     systemInstruction: SYSTEM_INSTRUCTION 
@@ -93,36 +85,28 @@ async function startBot() {
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
-        if (from.includes('status@broadcast')) return;
-
         const pushName = msg.pushName || "Cliente";
         const isImage = !!msg.message.imageMessage;
         const textBody = (msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || "").trim();
-
-        console.log(`Mensaje de ${from}: ${textBody} [Img: ${isImage}]`);
 
         try {
             if (!chatHistory[from]) chatHistory[from] = [];
             
             let promptParts = [];
-            // Construimos el contexto con historial
-            let contextWithHistory = `Historial de conversación:\n${chatHistory[from].join('\n')}\n\nUsuario: ${textBody}`;
+            let fullPrompt = `Historial:\n${chatHistory[from].join('\n')}\n\nUsuario dice: ${textBody}`;
 
             if (isImage) {
                 const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'error' }), reuploadRequest: sock.updateMediaMessage });
-                
                 promptParts = [
-                    { text: contextWithHistory + "\n[INSTRUCCIÓN: Analiza la imagen del repuesto adjunto para identificarlo dentro del catálogo de ONE4CARS]" },
+                    { text: fullPrompt + "\n[INSTRUCCIÓN: Analiza la imagen del repuesto adjunto]" },
                     { inlineData: { mimeType: "image/jpeg", data: buffer.toString("base64") } }
                 ];
             } else {
-                promptParts = [{ text: contextWithHistory }];
+                promptParts = [{ text: fullPrompt }];
             }
 
-            // Llamada a Gemini con manejo de errores específico
             const result = await model.generateContent(promptParts);
-            const response = await result.response;
-            const responseText = response.text();
+            const responseText = result.response.text();
 
             let finalResponse = responseText;
             const jsonMatch = responseText.match(/\{"accion":\s*"AGENDAR".*?\}/s);
@@ -131,37 +115,23 @@ async function startBot() {
                 try {
                     const dataAgenda = JSON.parse(jsonMatch[0]);
                     finalResponse = responseText.replace(jsonMatch[0], '').trim(); 
-                    
-                    await cobranza.registrarAgenda(
-                        from, 
-                        pushName, 
-                        dataAgenda.evento, 
-                        textBody, 
-                        finalResponse, 
-                        dataAgenda.fecha
-                    );
+                    await cobranza.registrarAgenda(from, pushName, dataAgenda.evento, textBody, finalResponse, dataAgenda.fecha);
                 } catch (e) {
                     console.error("Error procesando JSON agenda:", e);
                 }
             }
 
             await sock.sendMessage(from, { text: finalResponse });
-
             chatHistory[from].push(`U: ${textBody}`);
             chatHistory[from].push(`B: ${finalResponse}`);
             if (chatHistory[from].length > 10) chatHistory[from].shift();
 
         } catch (error) {
-            console.error("Error en el flujo del bot:", error);
-            // Si el error es el 404, informamos en consola para depuración de API
-            if (error.message.includes('404')) {
-                console.error("CRÍTICO: El modelo gemini-1.5-flash no fue encontrado. Verifica tu API Key y cuota.");
-            }
+            console.error("Error bot:", error);
         }
     });
 }
 
-// --- SERVIDOR HTTP ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
@@ -249,10 +219,8 @@ http.createServer(async (req, res) => {
                         const selected = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
                         if (selected.length === 0) return alert('Seleccione facturas');
                         if (!confirm('¿Enviar mensajes a ' + selected.length + ' clientes?')) return;
-
                         const btn = document.getElementById('btnEnviar');
                         btn.disabled = true; btn.innerText = 'Enviando...';
-
                         try {
                             const res = await fetch('/enviar-cobranza', {
                                 method: 'POST',
@@ -293,21 +261,19 @@ http.createServer(async (req, res) => {
                 if (socketBot && data.telefono && data.mensaje) {
                     let num = data.telefono.replace(/\D/g, '');
                     if (!num.startsWith('58')) num = '58' + num;
-                    const jid = \`\${num}@s.whatsapp.net\`;
+                    const jid = `${num}@s.whatsapp.net`;
                     await socketBot.sendMessage(jid, { text: data.mensaje });
                     res.writeHead(200); res.end('OK');
-                } else {
-                    res.writeHead(400); res.end('Faltan datos');
-                }
+                } else { res.writeHead(400); res.end('Faltan datos'); }
             } catch(e) { res.writeHead(500); res.end('Error'); }
         });
     }
     else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (qrCodeData.includes("data:image")) {
-            res.write(\`<center style="margin-top:50px;"><h1>Escanea ONE4CARS</h1><img src="\${qrCodeData}" width="300"><br><br><a href="/cobranza" style="color:blue">Ir a Cobranza</a></center>\`);
+            res.write(`<center style="margin-top:50px;"><h1>Escanea ONE4CARS</h1><img src="${qrCodeData}" width="300"><br><br><a href="/cobranza" style="color:blue">Ir a Cobranza</a></center>`);
         } else {
-            res.write(\`<center style="margin-top:100px;"><h1>\${qrCodeData || "Iniciando..."}</h1><br><a href="/cobranza" style="padding:10px 20px; background:green; color:white; border-radius:5px; text-decoration:none;">ENTRAR A COBRANZA</a></center>\`);
+            res.write(`<center style="margin-top:100px;"><h1>${qrCodeData || "Iniciando..."}</h1><br><a href="/cobranza" style="padding:10px 20px; background:green; color:white; border-radius:5px; text-decoration:none;">ENTRAR A COBRANZA</a></center>`);
         }
         res.end();
     }
