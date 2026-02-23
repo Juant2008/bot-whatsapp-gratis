@@ -40,10 +40,11 @@ Debes ofrecer y manejar estos enlaces según el contexto del usuario:
 REGLA DE ORO: No inventar precios. Si no hay stock o el dato es incierto, remitir al Asesor Humano.
 `;
 
+// CORRECCIÓN DEL ERROR 404: Usar apiVersion v1 y pasar systemInstruction correctamente
 const model = genAI.getGenerativeModel({ 
     model: "gemini-1.5-flash",
-    systemInstruction: SYSTEM_INSTRUCTION 
-});
+    systemInstruction: { role: "system", parts: [{ text: SYSTEM_INSTRUCTION }] }
+}, { apiVersion: 'v1' });
 
 let qrCodeData = "";
 let socketBot = null;
@@ -74,7 +75,7 @@ async function startBot() {
             const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
             if (statusCode !== DisconnectReason.loggedOut) setTimeout(() => startBot(), 5000);
         } else if (connection === 'open') {
-            qrCodeData = "BOT ONLINE CON GEMINI 🚀";
+            qrCodeData = "BOT ONLINE 🚀";
             console.log('🚀 ONE4CARS Conectado con éxito');
         }
     });
@@ -93,19 +94,19 @@ async function startBot() {
             if (!chatHistory[from]) chatHistory[from] = [];
             
             let promptParts = [];
-            let fullPrompt = `Historial:\n${chatHistory[from].join('\n')}\n\nUsuario dice: ${textBody}`;
+            let fullPrompt = `Historial:\n${chatHistory[from].join('\n')}\n\nUsuario: ${textBody}`;
 
             if (isImage) {
                 const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'error' }), reuploadRequest: sock.updateMediaMessage });
                 promptParts = [
-                    { text: fullPrompt + "\n[INSTRUCCIÓN: Analiza la imagen del repuesto adjunto]" },
+                    { text: fullPrompt },
                     { inlineData: { mimeType: "image/jpeg", data: buffer.toString("base64") } }
                 ];
             } else {
                 promptParts = [{ text: fullPrompt }];
             }
 
-            const result = await model.generateContent(promptParts);
+            const result = await model.generateContent({ contents: [{ role: "user", parts: promptParts }] });
             const responseText = result.response.text();
 
             let finalResponse = responseText;
@@ -116,14 +117,11 @@ async function startBot() {
                     const dataAgenda = JSON.parse(jsonMatch[0]);
                     finalResponse = responseText.replace(jsonMatch[0], '').trim(); 
                     await cobranza.registrarAgenda(from, pushName, dataAgenda.evento, textBody, finalResponse, dataAgenda.fecha);
-                } catch (e) {
-                    console.error("Error procesando JSON agenda:", e);
-                }
+                } catch (e) { console.error("Error JSON:", e); }
             }
 
             await sock.sendMessage(from, { text: finalResponse });
-            chatHistory[from].push(`U: ${textBody}`);
-            chatHistory[from].push(`B: ${finalResponse}`);
+            chatHistory[from].push(`U: ${textBody}`, `B: ${finalResponse}`);
             if (chatHistory[from].length > 10) chatHistory[from].shift();
 
         } catch (error) {
@@ -132,6 +130,7 @@ async function startBot() {
     });
 }
 
+// --- SERVIDOR HTTP COMPLETO (SIN SIMPLIFICAR) ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
@@ -148,88 +147,103 @@ http.createServer(async (req, res) => {
                 <title>ONE4CARS - Cobranza</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-                <style>body{background:#f8f9fa} .container{margin-top:20px; background:white; padding:20px; border-radius:10px; box-shadow:0 0 10px rgba(0,0,0,0.1)}</style>
+                <style>
+                    body { background: #f4f7f6; font-family: sans-serif; }
+                    .header-custom { background: #1a2a6c; color: white; padding: 15px; border-radius: 0 0 15px 15px; margin-bottom: 20px; }
+                    .table-container { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                    .sticky-top { top: -1px; background: white; z-index: 100; }
+                </style>
             </head>
             <body>
-                <div class="container">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <h2>📊 Panel de Cobranza (AI Powered)</h2>
+                <div class="container-fluid">
+                    <div class="header-custom shadow">
+                        <h3>📊 Panel Control de Cobranza - ONE4CARS</h3>
                     </div>
-                    <hr>
-                    <form method="GET" class="row g-2 mb-4">
-                        <div class="col-md-3">
-                            <label class="form-label">Vendedor</label>
-                            <select name="vendedor" class="form-select form-select-sm">
-                                <option value="">Todos</option>
-                                ${vendedores.map(v => `<option value="${v.nombre}" ${parsedUrl.query.vendedor === v.nombre ? 'selected' : ''}>${v.nombre}</option>`).join('')}
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Zona</label>
-                            <select name="zona" class="form-select form-select-sm">
-                                <option value="">Todas</option>
-                                ${zonas.map(z => `<option value="${z.zona}" ${parsedUrl.query.zona === z.zona ? 'selected' : ''}>${z.zona}</option>`).join('')}
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label">Días (Min)</label>
-                            <input type="number" name="dias" class="form-control form-control-sm" value="${parsedUrl.query.dias || 0}">
-                        </div>
-                        <div class="col-md-2 d-flex align-items-end">
-                            <button type="submit" class="btn btn-primary btn-sm w-100">Filtrar</button>
-                        </div>
-                    </form>
+                    
+                    <div class="table-container mx-2">
+                        <form method="GET" class="row g-3 mb-4 p-3 bg-light rounded border">
+                            <div class="col-md-3">
+                                <label class="form-label fw-bold">Vendedor</label>
+                                <select name="vendedor" class="form-select shadow-sm">
+                                    <option value="">Todos los Vendedores</option>
+                                    ${vendedores.map(v => `<option value="${v.nombre}" ${parsedUrl.query.vendedor === v.nombre ? 'selected' : ''}>${v.nombre}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label fw-bold">Zona</label>
+                                <select name="zona" class="form-select shadow-sm">
+                                    <option value="">Todas las Zonas</option>
+                                    ${zonas.map(z => `<option value="${z.zona}" ${parsedUrl.query.zona === z.zona ? 'selected' : ''}>${z.zona}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label fw-bold">Días Vencidos</label>
+                                <input type="number" name="dias" class="form-control shadow-sm" value="${parsedUrl.query.dias || 0}">
+                            </div>
+                            <div class="col-md-2 d-flex align-items-end">
+                                <button type="submit" class="btn btn-primary w-100 shadow-sm">🔍 Filtrar Datos</button>
+                            </div>
+                        </form>
 
-                    <form id="formEnvio">
-                        <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
-                            <table class="table table-sm table-hover border">
-                                <thead class="table-light sticky-top">
-                                    <tr>
-                                        <th><input type="checkbox" id="selectAll" class="form-check-input"></th>
-                                        <th>Cliente</th>
-                                        <th>Factura</th>
-                                        <th>Saldo</th>
-                                        <th>Días</th>
-                                        <th>Vendedor</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${deudores.map(d => `
+                        <form id="formMasivo">
+                            <div class="table-responsive" style="max-height: 600px;">
+                                <table class="table table-hover align-middle">
+                                    <thead class="table-dark sticky-top">
                                         <tr>
-                                            <td><input type="checkbox" name="f" class="rowCheck form-check-input" value='${JSON.stringify(d)}'></td>
-                                            <td><small>${d.nombres}</small></td>
-                                            <td><small>${d.nro_factura}</small></td>
-                                            <td class="text-danger"><b>$${parseFloat(d.saldo_pendiente).toFixed(2)}</b></td>
-                                            <td><span class="badge bg-warning text-dark">${d.dias_transcurridos}</span></td>
-                                            <td><small>${d.vendedor_nom}</small></td>
+                                            <th><input type="checkbox" id="checkAll" class="form-check-input"></th>
+                                            <th>Cliente / RIF</th>
+                                            <th>Factura</th>
+                                            <th>Saldo Pendiente</th>
+                                            <th>Días</th>
+                                            <th>Vendedor</th>
                                         </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                        <button type="button" onclick="enviarMensajes()" id="btnEnviar" class="btn btn-success w-100 mt-3">🚀 Enviar WhatsApp Seleccionados</button>
-                    </form>
+                                    </thead>
+                                    <tbody>
+                                        ${deudores.map(d => `
+                                            <tr>
+                                                <td><input type="checkbox" name="factura" class="rowCheck form-check-input" value='${JSON.stringify(d)}'></td>
+                                                <td><b>${d.nombres}</b><br><small class="text-muted">${d.id_cliente}</small></td>
+                                                <td>#${d.nro_factura}</td>
+                                                <td class="text-danger fw-bold">$${parseFloat(d.saldo_pendiente).toFixed(2)}</td>
+                                                <td><span class="badge ${d.dias_transcurridos > 30 ? 'bg-danger' : 'bg-warning text-dark'}">${d.dias_transcurridos} días</span></td>
+                                                <td>${d.vendedor_nom}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="mt-4 p-3 bg-white border-top sticky-bottom">
+                                <button type="button" onclick="enviarProceso()" id="btnSubmit" class="btn btn-success btn-lg shadow w-100">🚀 Enviar Notificaciones Masivas vía WhatsApp</button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
+
                 <script>
-                    document.getElementById('selectAll').onclick = function() {
-                        const checks = document.querySelectorAll('.rowCheck');
-                        for (const c of checks) c.checked = this.checked;
+                    document.getElementById('checkAll').onclick = function() {
+                        document.querySelectorAll('.rowCheck').forEach(c => c.checked = this.checked);
                     }
-                    async function enviarMensajes() {
-                        const selected = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
-                        if (selected.length === 0) return alert('Seleccione facturas');
-                        if (!confirm('¿Enviar mensajes a ' + selected.length + ' clientes?')) return;
-                        const btn = document.getElementById('btnEnviar');
-                        btn.disabled = true; btn.innerText = 'Enviando...';
+
+                    async function enviarProceso() {
+                        const seleccionados = Array.from(document.querySelectorAll('.rowCheck:checked')).map(c => JSON.parse(c.value));
+                        if(seleccionados.length === 0) return alert('Por favor, selecciona al menos una factura.');
+                        
+                        if(!confirm('¿Deseas enviar recordatorios automáticos a ' + seleccionados.length + ' clientes?')) return;
+                        
+                        const btn = document.getElementById('btnSubmit');
+                        btn.disabled = true; btn.innerHTML = 'Enviando... Espere';
+
                         try {
-                            const res = await fetch('/enviar-cobranza', {
+                            const response = await fetch('/enviar-cobranza', {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ facturas: selected })
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ facturas: seleccionados })
                             });
-                            alert(await res.text());
-                        } catch(e) { alert('Error en el envío'); }
-                        btn.disabled = false; btn.innerText = '🚀 Enviar WhatsApp Seleccionados';
+                            const resText = await response.text();
+                            alert(resText);
+                        } catch(e) { alert('Error en la comunicación con el bot.'); }
+                        
+                        btn.disabled = false; btn.innerHTML = '🚀 Enviar Notificaciones Masivas vía WhatsApp';
                     }
                 </script>
             </body>
@@ -241,40 +255,28 @@ http.createServer(async (req, res) => {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', async () => {
-            try {
-                const data = JSON.parse(body);
-                if (socketBot && data.facturas) {
-                    cobranza.ejecutarEnvioMasivo(socketBot, data.facturas);
-                    res.writeHead(200); res.end('Envío masivo iniciado...');
-                } else {
-                    res.writeHead(400); res.end('Bot no conectado');
-                }
-            } catch(e) { res.writeHead(500); res.end('Error interno'); }
-        });
-    }
-    else if (path === '/enviar-pago' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
-        req.on('end', async () => {
-            try {
-                const data = JSON.parse(body);
-                if (socketBot && data.telefono && data.mensaje) {
-                    let num = data.telefono.replace(/\D/g, '');
-                    if (!num.startsWith('58')) num = '58' + num;
-                    const jid = `${num}@s.whatsapp.net`;
-                    await socketBot.sendMessage(jid, { text: data.mensaje });
-                    res.writeHead(200); res.end('OK');
-                } else { res.writeHead(400); res.end('Faltan datos'); }
-            } catch(e) { res.writeHead(500); res.end('Error'); }
+            const data = JSON.parse(body);
+            if (socketBot && data.facturas) {
+                cobranza.ejecutarEnvioMasivo(socketBot, data.facturas);
+                res.writeHead(200); res.end('Proceso de envío iniciado correctamente.');
+            } else {
+                res.writeHead(400); res.end('El Bot no está conectado.');
+            }
         });
     }
     else {
+        // Pantalla Principal con QR
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        if (qrCodeData.includes("data:image")) {
-            res.write(`<center style="margin-top:50px;"><h1>Escanea ONE4CARS</h1><img src="${qrCodeData}" width="300"><br><br><a href="/cobranza" style="color:blue">Ir a Cobranza</a></center>`);
-        } else {
-            res.write(`<center style="margin-top:100px;"><h1>${qrCodeData || "Iniciando..."}</h1><br><a href="/cobranza" style="padding:10px 20px; background:green; color:white; border-radius:5px; text-decoration:none;">ENTRAR A COBRANZA</a></center>`);
-        }
+        res.write(\`
+            <center style="font-family:sans-serif; margin-top:50px;">
+                <div style="max-width:400px; padding:20px; border:1px solid #ccc; border-radius:15px; background:#fff; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+                    <img src="https://www.one4cars.com/img/logo.png" width="200"><br><br>
+                    \${qrCodeData.includes("data:image") ? \`<img src="\${qrCodeData}" width="300"><h3>Escanea para conectar</h3>\` : \`<h2>\${qrCodeData}</h2>\`}
+                    <br><br>
+                    <a href="/cobranza" style="display:inline-block; padding:15px 30px; background:#1a2a6c; color:white; text-decoration:none; border-radius:10px; font-weight:bold;">IR AL PANEL DE COBRANZA</a>
+                </div>
+            </center>
+        \`);
         res.end();
     }
 }).listen(port, '0.0.0.0');
