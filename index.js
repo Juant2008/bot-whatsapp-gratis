@@ -86,20 +86,22 @@ async function startBot() {
             const responseText = result.response.text();
 
             await sock.sendMessage(from, { text: titulo + responseText });
-        } catch (error) {
-            console.error("ERROR REAL:", error.message);
-            // Si el error es por la API, enviamos el menú manual para no dejar al cliente solo
-            const menuManual = "¡Hola! Estamos actualizando nuestros sistemas.\n\n🏦 Medios de Pago: https://www.one4cars.com/medios_de_pago.php/\n📄 
-                Estado de Cuenta: https://www.one4cars.com/estado_de_cuenta.php/\n💰 
-                Lista de Precios: https://www.one4cars.com/consulta_productos.php/\n🛒 
-                Tomar Pedido: https://www.one4cars.com/tomar_pedido.php/\n👥
-    Afiliar Cliente: https://www.one4cars.com/afiliar_clientes.php/\n👥 
-   Mis Clientes: https://www.one4cars.com/mis_clientes.php/\n⚙️
-    Ficha Producto: https://www.one4cars.com/consulta_productos.php/\n🚚
-    Despacho: https://one4cars.com/sevencorpweb/productos_transito_web.php/\n👤
-    Asesor: Un humano te contactará.
-           " ;
+} catch (error) {
+            console.error("ERROR REAL EN GEMINI:", error.message);
             
+            // Mensaje de respaldo con los 9 enlaces obligatorios formateados correctamente
+            const menuManual = `¡Hola! Estamos actualizando mi cerebro de IA, pero aquí tienes nuestras opciones directas:
+
+🏦 *Medios de Pago:* https://www.one4cars.com/medios_de_pago.php/
+📄 *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
+💰 *Lista de Precios:* https://www.one4cars.com/consulta_productos.php/
+🛒 *Tomar Pedido:* https://www.one4cars.com/tomar_pedido.php/
+👥 *Afiliar Cliente:* https://www.one4cars.com/afiliar_clientes.php/
+👥 *Mis Clientes:* https://www.one4cars.com/mis_clientes.php/
+⚙️ *Ficha Producto:* https://www.one4cars.com/consulta_productos.php/
+🚚 *Despacho:* https://one4cars.com/sevencorpweb/productos_transito_web.php
+👤 *Asesor:* Un humano le contactará a la brevedad.`;
+
             await sock.sendMessage(from, { text: titulo + menuManual });
         }
     });
