@@ -89,7 +89,17 @@ async function startBot() {
         } catch (error) {
             console.error("ERROR REAL:", error.message);
             // Si el error es por la API, enviamos el menú manual para no dejar al cliente solo
-            const menuManual = "¡Hola! Estamos actualizando nuestros sistemas.\n\n🏦 Medios de Pago: https://www.one4cars.com/medios_de_pago.php/\n📄 Estado de Cuenta: https://www.one4cars.com/estado_de_cuenta.php/\n💰 Lista de Precios: https://www.one4cars.com/consulta_productos.php/";
+            const menuManual = "¡Hola! Estamos actualizando nuestros sistemas.\n\n🏦 Medios de Pago: https://www.one4cars.com/medios_de_pago.php/\n📄 
+                Estado de Cuenta: https://www.one4cars.com/estado_de_cuenta.php/\n💰 
+                Lista de Precios: https://www.one4cars.com/consulta_productos.php/\n🛒 
+                Tomar Pedido: https://www.one4cars.com/tomar_pedido.php/\n👥
+    Afiliar Cliente: https://www.one4cars.com/afiliar_clientes.php/\n👥 
+   Mis Clientes: https://www.one4cars.com/mis_clientes.php/\n⚙️
+    Ficha Producto: https://www.one4cars.com/consulta_productos.php/\n🚚
+    Despacho: https://one4cars.com/sevencorpweb/productos_transito_web.php/\n👤
+    Asesor: Un humano te contactará.
+           " ;
+            
             await sock.sendMessage(from, { text: titulo + menuManual });
         }
     });
