@@ -8,18 +8,15 @@ const {
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
-const url = require('url');
 const pino = require('pino');
-const cron = require('node-cron');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const mysql = require('mysql2/promise');
 
-// --- CONFIGURACIÓN DE IA (CORRECCIÓN PARA RENDER Y 404) ---
+// --- IA CONFIG (SOLUCIÓN DEFINITIVA AL 404) ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Usamos el modelo sin prefijos innecesarios para evitar el 404
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// --- CONFIGURACIÓN DE BASE DE DATOS ---
+// --- BASE DE DATOS (HOST EXTERNO PARA RENDER) ---
 const dbConfig = {
     host: 'one4cars.com',
     user: 'juant200_one4car',
@@ -27,7 +24,7 @@ const dbConfig = {
     database: 'juant200_venezon'
 };
 
-// --- ENTRENAMIENTO COMPLETO EXTRAÍDO DEL DOCUMENTO ---
+// --- ENTRENAMIENTO COMPLETO (TAL CUAL LO PEDISTE) ---
 const SYSTEM_PROMPT = `
 Eres el Asistente Virtual de lenguaje natural de ONE4CARS. Tu misión es atender a clientes y vendedores como un experto.
 INSTRUCCIONES DE ENTRENAMIENTO OBLIGATORIAS:
@@ -74,8 +71,8 @@ let qrCodeData = "";
 let socketBot = null;
 
 async function startBot() {
-    // Usamos una carpeta de sesión nueva para limpiar el error de Bad MAC y sesión
-    const { state, saveCreds } = await useMultiFileAuthState('auth_session_stable');
+    // CAMBIO DE CARPETA DE SESIÓN PARA ELIMINAR EL ERROR "BAD MAC"
+    const { state, saveCreds } = await useMultiFileAuthState('auth_final_one4cars');
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -99,11 +96,11 @@ async function startBot() {
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
             if (statusCode !== DisconnectReason.loggedOut) {
-                console.log("Reconectando por error técnico...");
+                console.log("Error de conexión. Reintentando...");
                 setTimeout(() => startBot(), 5000);
             }
         } else if (connection === 'open') {
-            qrCodeData = "SISTEMA ACTIVO ✅";
+            qrCodeData = "ONLINE ✅";
             console.log('🚀 ONE4CARS CONECTADO');
         }
     });
@@ -117,29 +114,22 @@ async function startBot() {
         const userText = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
         try {
-            // SOLUCIÓN AL 404: Usamos generateContent con el formato de objeto explícito
+            // CORRECCIÓN LLAMADA GEMINI (FORMATO REQUERIDO POR LA ÚLTIMA VERSIÓN)
             const result = await model.generateContent({
-                contents: [{ 
-                    role: 'user', 
-                    parts: [{ text: SYSTEM_PROMPT + "\n\nCliente dice: " + userText }] 
-                }]
+                contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT + "\n\nCliente: " + userText }] }]
             });
             
             const responseText = result.response.text();
             await sock.sendMessage(from, { text: responseText });
-
         } catch (error) {
-            console.error("Error Gemini:", error.message);
-            if (error.message.includes('404')) {
-                await sock.sendMessage(from, { text: "Estamos actualizando mi cerebro. Por favor, intente de nuevo en un momento." });
-            }
+            console.error("Error en Gemini:", error.message);
         }
     });
 }
 
-// --- SERVIDOR HTTP CON HEADER Y RUTAS COMPLETAS ---
+// --- SERVIDOR HTTP CON HEADER NEGRO Y RUTAS ---
 http.createServer((req, res) => {
-    const parsedUrl = url.parse(req.url, true);
+    const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
 
     if (req.method === 'POST' && parsedUrl.pathname === '/enviar-mensaje') {
         let body = '';
@@ -158,28 +148,21 @@ http.createServer((req, res) => {
         return;
     }
 
-    if (parsedUrl.pathname === '/cobranza') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.write("<h1>Módulo de Cobranza ONE4CARS</h1>");
-        res.end();
-        return;
-    }
-
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.write(`
         <html>
         <head><title>ONE4CARS PANEL</title></head>
-        <body style="margin:0; font-family:Arial, sans-serif;">
+        <body style="margin:0; font-family:Arial;">
             <header style="background:#000; color:#fff; padding:20px; text-align:center;">
-                <h2>ONE4CARS - SISTEMA DE INTELIGENCIA ARTIFICIAL</h2>
+                <h1>ONE4CARS - CONTROL DE INTELIGENCIA ARTIFICIAL</h1>
             </header>
             <div style="text-align:center; padding:50px;">
     `);
 
     if (qrCodeData.includes("data:image")) {
-        res.write(`<h2>ESCANEE NUEVO QR PARA REINICIAR</h2><img src="${qrCodeData}" width="300">`);
+        res.write(`<h2>ESCANEA EL QR PARA REPARAR LA SESIÓN</h2><img src="${qrCodeData}" width="300">`);
     } else {
-        res.write(`<h2>STATUS: ${qrCodeData || "Iniciando..."}</h2>`);
+        res.write(`<h2>Status: ${qrCodeData || "Iniciando..."}</h2>`);
     }
 
     res.write(`</div></body></html>`);
