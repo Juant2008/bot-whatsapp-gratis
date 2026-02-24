@@ -21,12 +21,10 @@ let model;
 try {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     // Usamos el ID de modelo confirmado para 2026
-model = genAI.getGenerativeModel({ 
-        model: "gemini-1.5-flash",
-        generationConfig: { 
-            temperature: 1.0 
-        }
-    });
+// Cambia esto en la parte superior de tu index.js
+const model = genAI.getGenerativeModel({ 
+    model: "gemini-1.5-flash-latest" // Agregamos '-latest' para asegurar compatibilidad con v1beta
+});
 } catch (e) {
     console.error("Error inicializando Gemini 3:", e);
 }
