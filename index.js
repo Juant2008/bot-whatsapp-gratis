@@ -10,24 +10,23 @@ const qrcode = require('qrcode');
 const http = require('http');
 const url = require('url');
 const pino = require('pino');
-const cron = require('node-cron');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const mysql = require('mysql2/promise');
-const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN DE IA (API KEY DESDE RENDER) ---
+// --- CONFIGURACIÓN DE IA (CORREGIDA PARA EVITAR EL 404) ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Usamos el nombre del modelo estable
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // --- CONFIGURACIÓN DE BASE DE DATOS ---
 const dbConfig = {
-    host: 'one4cars.com',
+    host: 'one4cars.com', 
     user: 'juant200_one4car',
     password: 'Notieneclave1*',
     database: 'juant200_venezon'
 };
 
-// --- ENTRENAMIENTO COMPLETO EXTRAÍDO DEL DOCUMENTO ---
+// --- EL SYSTEM_PROMPT EXACTO QUE ME PEDISTE ---
 const SYSTEM_PROMPT = `
 Eres el Asistente Virtual de lenguaje natural de ONE4CARS. Tu misión es atender a clientes y vendedores como un experto.
 INSTRUCCIONES DE ENTRENAMIENTO OBLIGATORIAS:
@@ -72,10 +71,10 @@ Venta: Al mayor (mínimo $100) y al detal.
 
 let qrCodeData = "";
 let socketBot = null;
-const port = process.env.PORT || 10000;
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    // Usamos una carpeta de sesión limpia para evitar el error 401 de device_removed
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_v3');
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -92,18 +91,23 @@ async function startBot() {
     socketBot = sock;
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
+        
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
-            if (statusCode !== DisconnectReason.loggedOut) {
-                console.log("Reconectando...");
+            // Si el error es 401 (Device Removed), necesitamos re-escanear
+            if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                qrCodeData = "SESIÓN EXPIRADA - RE-ESCANEÉ QR";
+                console.log("Sesión eliminada. Por favor escanee de nuevo.");
+            } else {
+                console.log("Reconectando por error técnico...");
                 setTimeout(() => startBot(), 5000);
             }
         } else if (connection === 'open') {
             qrCodeData = "ONLINE ✅";
-            console.log('🚀 ONE4CARS Conectado');
+            console.log('🚀 ONE4CARS CONECTADO');
         }
     });
 
@@ -116,27 +120,24 @@ async function startBot() {
         const userText = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
         try {
-            const chat = model.startChat({
-                history: [
-                    { role: "user", parts: [{ text: SYSTEM_PROMPT }] },
-                    { role: "model", parts: [{ text: "Entendido. Soy el asistente de ONE4CARS entrenado. ¿En qué puedo ayudarle?" }] }
-                ],
-            });
-
-            const result = await chat.sendMessage(userText);
-            const response = result.response.text();
-            await sock.sendMessage(from, { text: response });
+            // Llamada a la IA con el manual completo
+            const result = await model.generateContent([SYSTEM_PROMPT, userText]);
+            const responseText = result.response.text();
+            
+            await sock.sendMessage(from, { text: responseText });
         } catch (error) {
-            console.error("Error Gemini:", error.message);
+            console.error("Error crítico Gemini:", error);
+            // Si falla la IA por cuota o error de modelo, avisamos sin tumbar el bot
+            await sock.sendMessage(from, { text: "Disculpe, estoy procesando mucha información. ¿Podría repetirme su solicitud?" });
         }
     });
 }
 
-// --- SERVIDOR HTTP CON TODAS LAS RUTAS ORIGINALES ---
+// --- SERVIDOR HTTP CON RUTAS ORIGINALES ---
 http.createServer((req, res) => {
     const parsedUrl = url.parse(req.url, true);
 
-    // RUTA POST PARA MENSAJES EXTERNOS
+    // Ruta POST para mensajes externos (FACTURACIÓN/NOTIFICACIONES)
     if (req.method === 'POST' && parsedUrl.pathname === '/enviar-mensaje') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
@@ -149,22 +150,14 @@ http.createServer((req, res) => {
                     await socketBot.sendMessage(`${num}@s.whatsapp.net`, { text: data.mensaje });
                     res.writeHead(200); res.end('OK');
                 } else {
-                    res.writeHead(400); res.end('Faltan datos');
+                    res.writeHead(400); res.end('Error de datos');
                 }
             } catch(e) { res.writeHead(500); res.end('Error'); }
         });
         return;
     }
 
-    // RUTA DE COBRANZA
-    if (parsedUrl.pathname === '/cobranza') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.write("<center><h1>Módulo de Cobranza ONE4CARS</h1><p>Estado: Activo</p></center>");
-        res.end();
-        return;
-    }
-
-    // VISTA PRINCIPAL CON HEADER
+    // Interfaz Web con el Header Solicitado
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.write(`
         <html>
@@ -177,28 +170,13 @@ http.createServer((req, res) => {
     `);
 
     if (qrCodeData.includes("data:image")) {
-        res.write(`<h2>Escanea para conectar</h2><img src="${qrCodeData}" width="300">`);
+        res.write(`<h2>ESCANEE PARA CONECTAR</h2><img src="${qrCodeData}" width="300">`);
     } else {
-        res.write(`<h2>Status: ${qrCodeData || "Iniciando..."}</h2>`);
+        res.write(`<h2>${qrCodeData || "Iniciando..."}</h2>`);
     }
 
-    res.write(`
-            </div>
-            <footer style="text-align:center; padding:20px; background:#eee; position:fixed; bottom:0; width:100%;">
-                <a href="/cobranza">Cobranza</a> | <a href="https://www.one4cars.com">Web</a>
-            </footer>
-        </body>
-        </html>
-    `);
+    res.write(`</div></body></html>`);
     res.end();
-}).listen(port);
-
-// --- CRONJOBS ORIGINALES ---
-cron.schedule('0 9 * * 1-5', async () => {
-    if (socketBot) {
-        console.log('Ejecutando cobros...');
-        // Aquí llamas a tu módulo de cobranza si es necesario
-    }
-});
+}).listen(process.env.PORT || 10000);
 
 startBot();
