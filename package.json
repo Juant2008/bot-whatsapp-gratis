@@ -1,15 +1,16 @@
 {
   "name": "bot-one4cars",
   "version": "1.1.0",
-  "description": "Bot WhatsApp One4Cars con Gemini 3",
+  "description": "Bot WhatsApp One4Cars con Gemini 3 y Cobranza",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.22.0", 
+    "@google/generative-ai": "^0.22.0",
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "^6.7.5",
+    "mysql2": "^3.9.2",
     "pino": "^8.19.0",
     "qrcode": "^1.5.3"
   },
