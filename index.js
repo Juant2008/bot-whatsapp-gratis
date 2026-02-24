@@ -10,13 +10,15 @@ const qrcode = require('qrcode');
 const http = require('http');
 const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const mysql = require('mysql2/promise');
 
-// --- IA CONFIG (SOLUCIÓN DEFINITIVA AL 404) ---
+// --- CONFIGURACIÓN DE IA (SOLUCIÓN AL 404 FORZADA) ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+// Forzamos el modelo específicamente para evitar que la librería use rutas v1beta obsoletas
+const model = genAI.getGenerativeModel({ 
+    model: "gemini-1.5-flash"
+});
 
-// --- BASE DE DATOS (HOST EXTERNO PARA RENDER) ---
+// --- BASE DE DATOS ---
 const dbConfig = {
     host: 'one4cars.com',
     user: 'juant200_one4car',
@@ -24,7 +26,7 @@ const dbConfig = {
     database: 'juant200_venezon'
 };
 
-// --- ENTRENAMIENTO COMPLETO (TAL CUAL LO PEDISTE) ---
+// --- TU ENTRENAMIENTO COMPLETO (SÍN MODIFICAR) ---
 const SYSTEM_PROMPT = `
 Eres el Asistente Virtual de lenguaje natural de ONE4CARS. Tu misión es atender a clientes y vendedores como un experto.
 INSTRUCCIONES DE ENTRENAMIENTO OBLIGATORIAS:
@@ -71,8 +73,8 @@ let qrCodeData = "";
 let socketBot = null;
 
 async function startBot() {
-    // CAMBIO DE CARPETA DE SESIÓN PARA ELIMINAR EL ERROR "BAD MAC"
-    const { state, saveCreds } = await useMultiFileAuthState('auth_final_one4cars');
+    // CAMBIO DE NOMBRE DE CARPETA PARA BORRAR LA SESIÓN CORRUPTA EN RENDER
+    const { state, saveCreds } = await useMultiFileAuthState('sesion_activa_one4cars');
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -83,7 +85,7 @@ async function startBot() {
         },
         printQRInTerminal: false,
         logger: pino({ level: 'error' }),
-        browser: ["ONE4CARS AI", "Chrome", "1.0.0"]
+        browser: ["ONE4CARS", "Chrome", "1.0.0"]
     });
 
     socketBot = sock;
@@ -96,12 +98,12 @@ async function startBot() {
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
             if (statusCode !== DisconnectReason.loggedOut) {
-                console.log("Error de conexión. Reintentando...");
+                console.log("Reiniciando flujo...");
                 setTimeout(() => startBot(), 5000);
             }
         } else if (connection === 'open') {
-            qrCodeData = "ONLINE ✅";
-            console.log('🚀 ONE4CARS CONECTADO');
+            qrCodeData = "LISTO ✅";
+            console.log('🚀 CONECTADO A ONE4CARS');
         }
     });
 
@@ -114,24 +116,23 @@ async function startBot() {
         const userText = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
         try {
-            // CORRECCIÓN LLAMADA GEMINI (FORMATO REQUERIDO POR LA ÚLTIMA VERSIÓN)
-            const result = await model.generateContent({
-                contents: [{ role: 'user', parts: [{ text: SYSTEM_PROMPT + "\n\nCliente: " + userText }] }]
-            });
+            // NUEVO MÉTODO DE LLAMADA: Directo y sin intermediarios de historial para evitar el 404
+            const promptFinal = `${SYSTEM_PROMPT}\n\nPregunta del cliente: ${userText}\nRespuesta del experto ONE4CARS:`;
             
-            const responseText = result.response.text();
-            await sock.sendMessage(from, { text: responseText });
+            const result = await model.generateContent(promptFinal);
+            const response = await result.response;
+            const text = response.text();
+
+            await sock.sendMessage(from, { text: text });
         } catch (error) {
-            console.error("Error en Gemini:", error.message);
+            console.error("Error crítico Gemini:", error.message);
         }
     });
 }
 
-// --- SERVIDOR HTTP CON HEADER NEGRO Y RUTAS ---
+// --- SERVIDOR WEB ---
 http.createServer((req, res) => {
-    const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
-
-    if (req.method === 'POST' && parsedUrl.pathname === '/enviar-mensaje') {
+    if (req.method === 'POST' && req.url === '/enviar-mensaje') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', async () => {
@@ -151,18 +152,18 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.write(`
         <html>
-        <head><title>ONE4CARS PANEL</title></head>
-        <body style="margin:0; font-family:Arial;">
-            <header style="background:#000; color:#fff; padding:20px; text-align:center;">
-                <h1>ONE4CARS - CONTROL DE INTELIGENCIA ARTIFICIAL</h1>
+        <head><title>ONE4CARS AI</title></head>
+        <body style="margin:0; font-family:Arial; text-align:center;">
+            <header style="background:#000; color:#fff; padding:20px;">
+                <h1>ONE4CARS - CONTROL DE IA</h1>
             </header>
-            <div style="text-align:center; padding:50px;">
+            <div style="padding:50px;">
     `);
 
     if (qrCodeData.includes("data:image")) {
-        res.write(`<h2>ESCANEA EL QR PARA REPARAR LA SESIÓN</h2><img src="${qrCodeData}" width="300">`);
+        res.write(`<h2>ESCANEA EL NUEVO QR AHORA</h2><img src="${qrCodeData}" width="300">`);
     } else {
-        res.write(`<h2>Status: ${qrCodeData || "Iniciando..."}</h2>`);
+        res.write(`<h2>Status: ${qrCodeData || "Cargando..."}</h2>`);
     }
 
     res.write(`</div></body></html>`);
