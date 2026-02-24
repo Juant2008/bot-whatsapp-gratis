@@ -16,25 +16,48 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 let model;
 try {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    
+    // CAMBIO CLAVE: Usamos "gemini-pro" porque es compatible con la versión
+    // de la librería que Render tiene instalada actualmente.
+    // Esto soluciona el error 404 inmediatamente.
+    model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    
 } catch (e) {
     console.error("Error fatal IA:", e);
 }
 
-// --- PROMPT ---
+// --- PROMPT MAESTRO (Tus enlaces de ONE4CARS) ---
 const SYSTEM_PROMPT = `
-Eres el Asistente de ONE4CARS. Tu única función es dar el enlace correcto.
-NO inventes respuestas.
+Eres el Asistente Virtual de ONE4CARS (Venezuela).
+Tu única función es redirigir al cliente al enlace correcto de nuestra web.
+NO inventes precios ni stock. Usa EXCLUSIVAMENTE estos enlaces:
 
-1. 💰 DEUDA/SALDO: "Ver saldo: https://www.one4cars.com/estado_de_cuenta.php/"
-2. 🏦 PAGOS: "Cuentas bancarias: https://www.one4cars.com/medios_de_pago.php/"
-3. 📦 PRECIOS/STOCK: "Lista de precios: https://www.one4cars.com/consulta_productos.php/"
-4. 🛒 PEDIDOS: "Cargar pedido: https://www.one4cars.com/tomar_pedido.php/"
-5. 👥 REGISTRO: "Nuevo cliente: https://www.one4cars.com/afiliar_cliente.php/"
-6. 📊 MIS CLIENTES: "Cartera: https://www.one4cars.com/mis_clientes.php/"
-7. ⚙️ FOTOS: "Ficha técnica: https://www.one4cars.com/ficha_producto.php/"
-8. 🚚 ENVÍOS: "Rastreo: https://www.one4cars.com/despacho.php/"
-9. 👤 ASESOR: "Contacte a su vendedor."
+1. 💰 DEUDA / SALDO / ESTADO DE CUENTA:
+   👉 "Para ver su saldo y facturas: https://www.one4cars.com/estado_de_cuenta.php/"
+
+2. 🏦 PAGOS / CUENTAS / ZELLE:
+   👉 "Nuestros medios de pago: https://www.one4cars.com/medios_de_pago.php/"
+
+3. 📦 PRECIOS / EXISTENCIA / STOCK:
+   👉 "Consulte precios y stock aquí: https://www.one4cars.com/consulta_productos.php/"
+
+4. 🛒 MONTAR PEDIDO:
+   👉 "Cargue su pedido aquí: https://www.one4cars.com/tomar_pedido.php/"
+
+5. 👥 NUEVO CLIENTE:
+   👉 "Registro de clientes: https://www.one4cars.com/afiliar_cliente.php/"
+
+6. 📊 MIS CLIENTES (Vendedores):
+   👉 "Su cartera de clientes: https://www.one4cars.com/mis_clientes.php/"
+
+7. ⚙️ FOTOS / FICHA TÉCNICA:
+   👉 "Ver fotos y detalles: https://www.one4cars.com/ficha_producto.php/"
+
+8. 🚚 ENVÍOS / GUÍAS:
+   👉 "Rastreo de despacho: https://www.one4cars.com/despacho.php/"
+
+9. 👤 ASESOR HUMANO:
+   👉 "Para atención personalizada, contacte a su Asesor de Ventas."
 
 Si saludan: "Hola, bienvenido a ONE4CARS. ¿En qué puedo ayudarle?"
 `;
@@ -73,26 +96,26 @@ async function startBot() {
             const error = lastDisconnect?.error;
             const statusCode = new Boom(error)?.output?.statusCode;
             
-            console.log(`Conexión cerrada. Código: ${statusCode}`);
+            // Ignoramos el error 515 (Stream Error) y reconectamos
+            if (statusCode === 515) {
+                console.log("🔄 Reinicio automático por error de flujo (Normal)...");
+                startBot();
+                return;
+            }
 
-            // SOLUCIÓN AL BUCLE INFINITO Y ERROR 401
-            if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || JSON.stringify(error).includes("device_removed")) {
-                console.log("⛔ SESIÓN INVÁLIDA O DISPOSITIVO REMOVIDO.");
-                console.log("🗑️ Borrando sesión y reiniciando...");
-                
+            if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                console.log("⛔ SESIÓN CERRADA. Borrando credenciales...");
                 try {
                     fs.rmSync(SESSION_DIR, { recursive: true, force: true });
-                } catch (e) { console.error("Error borrando carpeta:", e); }
-
-                // IMPORTANTE: Matamos el proceso para que Render lo reinicie limpio
-                process.exit(0); 
+                } catch (e) {}
+                process.exit(0); // Forzamos reinicio limpio
             } else {
                 console.log("🔄 Reconectando...");
                 startBot();
             }
         } else if (connection === 'open') {
             qrCodeData = "✅ CONECTADO";
-            console.log('🚀 ONE4CARS ONLINE');
+            console.log('🚀 ONE4CARS ONLINE - LISTO PARA RESPONDER');
         }
     });
 
@@ -108,12 +131,18 @@ async function startBot() {
 
         try {
             if (model) {
+                // Enviamos "Escribiendo..." para que se vea real
+                await sock.sendPresenceUpdate('composing', from);
+
                 const result = await model.generateContent(`${SYSTEM_PROMPT}\n\nCliente: ${userText}\nRespuesta:`);
                 const response = await result.response;
-                await sock.sendMessage(from, { text: response.text() });
+                const text = response.text();
+
+                await sock.sendMessage(from, { text: text });
             }
         } catch (error) {
-            console.error("Error IA (Ignorado para no tumbar el bot):", error.message);
+            console.error("Error IA:", error.message);
+            // Si falla la IA, al menos no tumba el bot
         }
     });
 }
