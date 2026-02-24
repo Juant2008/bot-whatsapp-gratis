@@ -12,52 +12,34 @@ const pino = require('pino');
 const fs = require('fs');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// --- CONFIGURACIÓN DE IA ---
+// --- CONFIGURACIÓN IA ---
 let model;
 try {
-    // Esta versión maneja correctamente el modelo flash
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 } catch (e) {
-    console.error("Error fatal inicializando Gemini (Revisar API KEY):", e);
+    console.error("Error fatal IA:", e);
 }
 
-// --- PROMPT MAESTRO CON TUS ENLACES ---
+// --- PROMPT ---
 const SYSTEM_PROMPT = `
-Eres el Asistente Virtual de ONE4CARS (Venezuela). Tu trabajo es redirigir al cliente a la web según su necesidad.
-NO inventes datos. Usa EXCLUSIVAMENTE estos enlaces:
+Eres el Asistente de ONE4CARS. Tu única función es dar el enlace correcto.
+NO inventes respuestas.
 
-1. 💰 DEUDA / SALDO / ESTADO DE CUENTA:
-   👉 "Para ver su saldo y facturas: https://www.one4cars.com/estado_de_cuenta.php/"
+1. 💰 DEUDA/SALDO: "Ver saldo: https://www.one4cars.com/estado_de_cuenta.php/"
+2. 🏦 PAGOS: "Cuentas bancarias: https://www.one4cars.com/medios_de_pago.php/"
+3. 📦 PRECIOS/STOCK: "Lista de precios: https://www.one4cars.com/consulta_productos.php/"
+4. 🛒 PEDIDOS: "Cargar pedido: https://www.one4cars.com/tomar_pedido.php/"
+5. 👥 REGISTRO: "Nuevo cliente: https://www.one4cars.com/afiliar_cliente.php/"
+6. 📊 MIS CLIENTES: "Cartera: https://www.one4cars.com/mis_clientes.php/"
+7. ⚙️ FOTOS: "Ficha técnica: https://www.one4cars.com/ficha_producto.php/"
+8. 🚚 ENVÍOS: "Rastreo: https://www.one4cars.com/despacho.php/"
+9. 👤 ASESOR: "Contacte a su vendedor."
 
-2. 🏦 PAGOS / CUENTAS / ZELLE:
-   👉 "Nuestros medios de pago: https://www.one4cars.com/medios_de_pago.php/"
-
-3. 📦 PRECIOS / EXISTENCIA / STOCK:
-   👉 "Consulte precios y stock aquí: https://www.one4cars.com/consulta_productos.php/"
-
-4. 🛒 MONTAR PEDIDO:
-   👉 "Cargue su pedido aquí: https://www.one4cars.com/tomar_pedido.php/"
-
-5. 👥 NUEVO CLIENTE:
-   👉 "Registro de clientes: https://www.one4cars.com/afiliar_cliente.php/"
-
-6. 📊 MIS CLIENTES (Vendedores):
-   👉 "Su cartera de clientes: https://www.one4cars.com/mis_clientes.php/"
-
-7. ⚙️ FOTOS / FICHA TÉCNICA:
-   👉 "Ver fotos y detalles: https://www.one4cars.com/ficha_producto.php/"
-
-8. 🚚 ENVÍOS / GUÍAS:
-   👉 "Rastreo de despacho: https://www.one4cars.com/despacho.php/"
-
-9. 👤 ASESOR HUMANO:
-   👉 "Para atención personalizada, contacte a su Asesor de Ventas."
-
-Si saludan, sé amable y venezolano ("Estamos a la orden"). Si preguntan algo de la lista, da el link directo.
+Si saludan: "Hola, bienvenido a ONE4CARS. ¿En qué puedo ayudarle?"
 `;
 
-let qrCodeData = "Iniciando...";
+let qrCodeData = "Cargando...";
 const SESSION_DIR = 'sesion_activa_one4cars';
 
 async function startBot() {
@@ -73,7 +55,7 @@ async function startBot() {
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
         browser: ["ONE4CARS", "Chrome", "1.0.0"],
-        connectTimeoutMs: 60000, // Aumentado para Venezuela
+        connectTimeoutMs: 60000,
         retryRequestDelayMs: 5000
     });
 
@@ -83,26 +65,33 @@ async function startBot() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            console.log("NUEVO QR GENERADO - ESCANEAR EN LA WEB");
+            console.log("QR NUEVO GENERADO");
             qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
         }
         
         if (connection === 'close') {
-            const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
-            console.log(`Conexión cerrada: ${reason}`);
+            const error = lastDisconnect?.error;
+            const statusCode = new Boom(error)?.output?.statusCode;
+            
+            console.log(`Conexión cerrada. Código: ${statusCode}`);
 
-            // Si la sesión se rompe (401) o se cierra sesión (403), borramos y reiniciamos
-            if (reason === DisconnectReason.loggedOut || reason === 401) {
-                console.log("Sesión corrupta. Borrando y reiniciando...");
-                fs.rmSync(SESSION_DIR, { recursive: true, force: true });
-                startBot();
+            // SOLUCIÓN AL BUCLE INFINITO Y ERROR 401
+            if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || JSON.stringify(error).includes("device_removed")) {
+                console.log("⛔ SESIÓN INVÁLIDA O DISPOSITIVO REMOVIDO.");
+                console.log("🗑️ Borrando sesión y reiniciando...");
+                
+                try {
+                    fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+                } catch (e) { console.error("Error borrando carpeta:", e); }
+
+                // IMPORTANTE: Matamos el proceso para que Render lo reinicie limpio
+                process.exit(0); 
             } else {
-                // Cualquier otro error (internet, 515, etc), solo reconectamos
-                console.log("Reconectando automáticamente...");
+                console.log("🔄 Reconectando...");
                 startBot();
             }
         } else if (connection === 'open') {
-            qrCodeData = "✅ CONECTADO EXITOSAMENTE";
+            qrCodeData = "✅ CONECTADO";
             console.log('🚀 ONE4CARS ONLINE');
         }
     });
@@ -118,35 +107,21 @@ async function startBot() {
         if (!userText) return;
 
         try {
-            if (!model) {
-                // Si falla la IA, respondemos algo básico para no dejar en visto
-                return; 
+            if (model) {
+                const result = await model.generateContent(`${SYSTEM_PROMPT}\n\nCliente: ${userText}\nRespuesta:`);
+                const response = await result.response;
+                await sock.sendMessage(from, { text: response.text() });
             }
-
-            const result = await model.generateContent(`${SYSTEM_PROMPT}\n\nCliente dice: ${userText}\nRespuesta:`);
-            const response = await result.response;
-            const text = response.text();
-
-            await sock.sendMessage(from, { text: text });
-
         } catch (error) {
-            console.error("Error IA:", error.message);
+            console.error("Error IA (Ignorado para no tumbar el bot):", error.message);
         }
     });
 }
 
-// Servidor Web para Render
+// Servidor Web
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(`
-        <html>
-            <head><meta http-equiv="refresh" content="5"></head>
-            <body style="text-align:center; font-family:sans-serif; padding:50px;">
-                <h1>ONE4CARS BOT</h1>
-                <div>${qrCodeData.includes("data:image") ? `<img src="${qrCodeData}" width="300">` : `<h3>${qrCodeData}</h3>`}</div>
-            </body>
-        </html>
-    `);
+    res.end(`<html><head><meta http-equiv="refresh" content="5"></head><body style="text-align:center;padding:50px;"><h1>ONE4CARS</h1><div>${qrCodeData.includes("data:image") ? `<img src="${qrCodeData}" width="300">` : `<h3>${qrCodeData}</h3>`}</div></body></html>`);
 }).listen(process.env.PORT || 10000);
 
 startBot();
