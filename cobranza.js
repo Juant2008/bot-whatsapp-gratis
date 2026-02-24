@@ -100,4 +100,4 @@ async function ejecutarEnvioMasivo(sock, facturas) {
     }
 }
 
-module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas }; 
+module.exports = { obtenerListaDeudores, ejecutarEnvioMasivo, obtenerVendedores, obtenerZonas };
