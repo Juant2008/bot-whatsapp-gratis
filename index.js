@@ -7,19 +7,16 @@ const pino = require('pino');
 const cobranza = require('./cobranza');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// --- MEMORIA TEMPORAL PARA EVITAR REPETICIONES ---
+// --- MEMORIA PARA EVITAR BUCLES ---
 const historialRespuestas = new Map();
-const TIEMPO_ESPERA = 5 * 60 * 1000; // 5 minutos para repetir el menú automático
+const TIEMPO_ESPERA_MENU = 3 * 60 * 1000; // 3 minutos para volver a mostrar el menú automático
 
-// --- CONFIGURACIÓN GEMINI DESDE RENDER ---
 const apiKey = process.env.GEMINI_API_KEY;
 let model = null;
 
 if (apiKey) {
     const genAI = new GoogleGenerativeAI(apiKey);
     model = genAI.getGenerativeModel({ model: "gemini-pro" });
-} else {
-    console.error("❌ ERROR: No se encontró la variable GEMINI_API_KEY en Render.");
 }
 
 let qrCodeData = "";
@@ -64,10 +61,7 @@ async function startBot() {
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         const bodyLower = body.toLowerCase();
 
-        // --- VALIDACIÓN DE REPETICIÓN ---
-        const ahora = Date.now();
-        const ultimaVez = historialRespuestas.get(from) || 0;
-
+        // 1. RESPUESTAS FIJAS (ESTO SIEMPRE FUNCIONA, NO SE BLOQUEA)
         const respuestasFijas = {
             'medios de pago': 'Estimado cliente, acceda al siguiente enlace para ver nuestras formas de pago actualizadas:\n\n🔗 https://www.one4cars.com/medios_de_pago.php/',
             'estado de cuenta': 'Estimado cliente, puede consultar su estado de cuenta detallado en el siguiente link:\n\n🔗 https://www.one4cars.com/estado_de_cuenta.php/',
@@ -82,61 +76,38 @@ async function startBot() {
 
         let respondido = false;
 
-        // 1. Verificamos si el mensaje contiene alguna palabra clave exacta (Estas siempre responden)
         for (const [key, val] of Object.entries(respuestasFijas)) {
             if (bodyLower.includes(key)) {
                 await sock.sendMessage(from, { text: "🚗 *SOPORTE ONE4CARS*\n________________________\n\n" + val });
-                historialRespuestas.set(from, ahora); 
                 respondido = true;
                 break;
             }
         }
 
-        // 2. IA / MENÚ (Solo si no ha respondido recientemente)
+        // 2. INTELIGENCIA ARTIFICIAL (CON FILTRO DE TIEMPO)
         if (!respondido && body.length > 0 && model) {
-            
-            // Si ya se le respondió hace menos del TIEMPO_ESPERA, ignoramos para no ser spam
-            if (ahora - ultimaVez < TIEMPO_ESPERA) return;
+            const ahora = Date.now();
+            const ultimaRespuestaIA = historialRespuestas.get(from) || 0;
 
-            try {
-                await sock.sendPresenceUpdate('composing', from);
+            // Solo respondemos con Gemini si han pasado más de 3 minutos para evitar el "spam" del menú
+            if (ahora - ultimaRespuestaIA > TIEMPO_ESPERA_MENU) {
+                try {
+                    await sock.sendPresenceUpdate('composing', from);
+                    const prompt = `Eres el asistente virtual oficial de ONE4CARS. El usuario escribió: "${body}". Muestra el menú de opciones si es un saludo.`;
+                    const result = await model.generateContent(prompt);
+                    const text = result.response.text();
 
-                const prompt = `
-                Eres el asistente virtual oficial de ONE4CARS (repuestos automotrices).
-                Tu nombre es "Bot One4Cars".
-                El usuario escribió: "${body}".
-
-                INSTRUCCIONES:
-                1. Sé muy cordial, profesional y usa emojis (🚗, 🔧, ✅).
-                2. Si el usuario saluda o pregunta qué puedes hacer, muestra ESTE MENÚ EXACTO:
-
-                   *MENÚ PRINCIPAL ONE4CARS*
-                   1. 🏦 Medios de Pago
-                   2. 📄 Estado de Cuenta
-                   3. 💰 Lista de Precios
-                   4. 🛒 Tomar Pedido
-                   5. 👥 Mis Clientes
-                   6. ➕ Afiliar Cliente
-                   7. ⚙️ Ficha Producto
-                   8. 🚚 Despacho
-                   9. 👤 Asesor
-
-                3. Mantén la respuesta breve.`;
-
-                const result = await model.generateContent(prompt);
-                const text = result.response.text();
-
-                await sock.sendMessage(from, { text: text });
-                historialRespuestas.set(from, ahora);
-
-            } catch (error) {
-                console.error("Error Gemini:", error);
+                    await sock.sendMessage(from, { text: text });
+                    historialRespuestas.set(from, ahora); // Guardamos la marca de tiempo
+                } catch (error) {
+                    console.error("Error Gemini:", error);
+                }
             }
         }
     });
 }
 
-// --- SERVIDOR WEB ---
+// --- SERVIDOR WEB (LÍNEAS RESTAURADAS) ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
@@ -224,10 +195,8 @@ http.createServer(async (req, res) => {
                         const selected = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
                         if (selected.length === 0) return alert('Seleccione facturas');
                         if (!confirm('¿Enviar mensajes a ' + selected.length + ' clientes?')) return;
-
                         const btn = document.getElementById('btnEnviar');
                         btn.disabled = true; btn.innerText = 'Enviando...';
-
                         try {
                             const res = await fetch('/enviar-cobranza', {
                                 method: 'POST',
