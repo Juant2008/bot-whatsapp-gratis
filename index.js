@@ -1,40 +1,66 @@
-const { 
-    default: makeWASocket, 
-    useMultiFileAuthState, 
-    DisconnectReason, 
-    fetchLatestBaileysVersion 
-} = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const qrcode = require('qrcode');
 const http = require('http');
+const url = require('url');
 const pino = require('pino');
-const cobranza = require('./cobranza');
+const mysql = require('mysql2/promise');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// --- CONFIGURACIÓN DE GEMINI 2.0 ---
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// --- CONFIGURACIÓN DE IA (API KEY DESDE RENDER) ---
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY); 
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// Instrucción de Sistema para ONE4CARS
-const systemInstruction = `Eres el Asistente Virtual de ONE4CARS, importadora de autopartes en Venezuela.
-REGLAS:
-1. Usa emojis y tono cordial venezolano.
-2. ENLACES OBLIGATORIOS:
-   🏦 Medios de Pago: https://www.one4cars.com/medios_de_pago.php/
-   📄 Estado de Cuenta: https://www.one4cars.com/estado_de_cuenta.php/
-   💰 Lista de Precios: https://www.one4cars.com/consulta_productos.php/
-   🛒 Tomar Pedido: https://www.one4cars.com/tomar_pedido.php/
-   👥 Afiliar Cliente: https://www.one4cars.com/afiliar_clientes.php/
-   👥 Mis Clientes: https://www.one4cars.com/mis_clientes.php/
-   ⚙️ Ficha Producto: https://www.one4cars.com/consulta_productos.php/
-   🚚 Despacho: https://one4cars.com/sevencorpweb/productos_transito_web.php
-   👤 Asesor: Un humano te contactará.
+// --- CONFIGURACIÓN DE BASE DE DATOS ---
+const dbConfig = {
+    host: 'one4cars.com',
+    user: 'juant200_one4car',
+    password: 'Notieneclave1*',
+    database: 'juant200_venezon'
+};
 
-3. Importamos de China, almacén en Caracas. Mayoristas 40% desc en divisas (Tasa BCV).`;
+// --- ENTRENAMIENTO COMPLETO EXTRAÍDO DEL DOCUMENTO ---
+const SYSTEM_PROMPT = `
+Eres el Asistente Virtual de lenguaje natural de ONE4CARS. Tu misión es atender a clientes y vendedores como un experto.
+INSTRUCCIONES DE ENTRENAMIENTO OBLIGATORIAS:
 
-// Inicializar modelo con configuración de seguridad
-const modelIA = genAI.getGenerativeModel({ 
-    model: "gemini-2.5-flash"
-});
+1. SOBRE LA EMPRESA:
+- Somos importadores directos de autopartes desde China en Venezuela.
+- Tenemos dos almacenes: 
+  * Almacén General: Donde se guardan los bultos de mercancía (venta al mayor).
+  * Almacén Intermedio: Donde se abren bultos y se mantiene stock para despachos rápidos.
+- Contamos con 10 vendedores que cubren Caracas y el interior del país.
+- Despachos: En Caracas entrega propia. Al interior, por la encomienda que el cliente prefiera (MRW, Zoom, Tealca, etc.).
+
+2. PRODUCTOS (Entrenamiento de Stock):
+Debes conocer y ofrecer nuestros productos estrella: Bombas de Gasolina, Bujías de Encendido, Correas, Crucetas, Filtros de Aceite, Filtros de Gasolina, Lápiz Estabilizador, Muñones, Poleas, Puentes de Cardan, Puntas de Tripoide, Rodamientos de Rueda, Sensores, Bases de Motor, Amortiguadores, Pastillas de Freno, Kit de Tiempo, Estoperas, y toda la línea de suspensión. 
+Venta: Al mayor (mínimo $100) y al detal.
+
+3. ESTRUCTURA TÉCNICA (Base de Datos):
+- Clientes: 'tab_cliente'. Vendedores: 'tab_vendedores'.
+- Facturas: 'tab_facturas' (cabecera con nro_factura, id_cliente, monto, pagada [SI/NO], comision_pagada [SI/NO]).
+- Renglones: 'tab_facturas_reng' (se relaciona con la factura mediante id_factura).
+- Web: Los pedidos de la web van a 'tab_pedidos' y los pagos a 'tab_pagos'.
+- China: Cotizaciones en 'tab_cotizaciones' y compras en 'tab_proveedores_facturas'.
+- Correlativos: Se guardan en 'tab_correlativos'.
+
+4. ENLACES Y SERVICIOS (Responder según necesidad):
+- 🏦 Medios de Pago: https://www.one4cars.com/medios_de_pago.php/
+- 📄 Estado de Cuenta: https://www.one4cars.com/estado_de_cuenta.php/
+- 💰 Lista de Precios/Productos: https://www.one4cars.com/consulta_productos.php/
+- 🛒 Tomar Pedido: https://www.one4cars.com/tomar_pedido.php/
+- 👥 Afiliar Cliente: https://www.one4cars.com/afiliar_cliente.php/
+- 👥 Mis Clientes: https://www.one4cars.com/mis_clientes.php/
+- ⚙️ Ficha Producto: https://www.one4cars.com/ficha_producto.php/
+- 🚚 Despacho: https://www.one4cars.com/despacho.php/
+- 👤 Asesor: Contacto directo con ventas.
+
+5. REGLAS DE ORO:
+- COBRANZA: Si un cliente tiene facturas con pagada='NO' y más de 35 días, recuérdale amablemente su compromiso de pago.
+- PRIVACIDAD: Solicita RIF o Cédula antes de dar saldos.
+- TONO: Profesional, venezolano, servicial. Usa "Estimado cliente" y "Estamos a su orden".
+- IMPORTANTE: No inventes precios ni stock. Si no sabes algo, indica que consultarás con el almacén.
+`;
 
 let qrCodeData = "";
 let socketBot = null;
@@ -49,7 +75,7 @@ async function startBot() {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'error' }),
-        browser: ["ONE4CARS AI", "Chrome", "1.0.0"]
+        browser: ["ONE4CARS BOT", "Chrome", "1.0.0"]
     });
 
     socketBot = sock;
@@ -58,13 +84,11 @@ async function startBot() {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (qr) qrcode.toDataURL(qr, (err, url) => { qrCodeData = url; });
-        
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error instanceof Boom)?.output?.statusCode;
             if (statusCode !== DisconnectReason.loggedOut) setTimeout(() => startBot(), 5000);
         } else if (connection === 'open') {
             qrCodeData = "BOT ONLINE ✅";
-            console.log('🚀 ONE4CARS Conectado');
         }
     });
 
@@ -74,63 +98,50 @@ async function startBot() {
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
-        const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
-        const titulo = "🚗 *SOPORTE ONE4CARS*\n________________________\n\n";
+        const userText = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
         try {
-            await sock.sendPresenceUpdate('composing', from);
+            // El bot consulta el entrenamiento completo antes de procesar
+            const chat = model.startChat({
+                history: [
+                    { role: "user", parts: [{ text: SYSTEM_PROMPT }] },
+                    { role: "model", parts: [{ text: "Entendido. Soy el asistente de ONE4CARS. Conozco los almacenes, productos, enlaces y tablas SQL. ¿En qué puedo ayudar al cliente?" }] }
+                ],
+            });
 
-            // Generar contenido enviando la instrucción de sistema en cada mensaje para evitar el 404 de v1beta
-            const promptFinal = `${systemInstruction}\n\nUsuario dice: ${body}`;
-            const result = await modelIA.generateContent(promptFinal);
-            const responseText = result.response.text();
+            const result = await chat.sendMessage(userText);
+            const response = await result.response.text();
 
-            await sock.sendMessage(from, { text: titulo + responseText });
-} catch (error) {
-            console.error("ERROR REAL EN GEMINI:", error.message);
-            
-            // Mensaje de respaldo con los 9 enlaces obligatorios formateados correctamente
-            const menuManual = `¡Hola! Bienvenido a ONE4CARS 🚗💨
+            await sock.sendMessage(from, { text: response });
 
-Soy tu asistente virtual. Para ayudarte rápidamente, escribe la palabra clave de lo que necesitas:
-
-🏦 *Medios de Pago:* https://www.one4cars.com/medios_de_pago.php/
-📄 *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
-💰 *Lista de Precios:* https://www.one4cars.com/consulta_productos.php/
-🛒 *Tomar Pedido:* https://www.one4cars.com/tomar_pedido.php/
-👥 *Afiliar Cliente:* https://www.one4cars.com/afiliar_clientes.php/
-👥 *Mis Clientes:* https://www.one4cars.com/mis_clientes.php/
-⚙️ *Ficha Producto:* https://www.one4cars.com/consulta_productos.php/
-🚚 *Despacho:* https://one4cars.com/sevencorpweb/productos_transito_web.php
-👤 *Asesor:* Un humano le contactará a la brevedad.`;
-
-            await sock.sendMessage(from, { text: titulo + menuManual });
+        } catch (error) {
+            console.error("Error Gemini:", error);
         }
     });
 }
 
-// --- SERVIDOR WEB MODERNO (Sin url.parse) ---
-http.createServer(async (req, res) => {
-    const protocol = req.headers['x-forwarded-proto'] || 'http';
-    const baseUrl = protocol + '://' + req.headers.host;
-    const myUrl = new URL(req.url, baseUrl);
-    const path = myUrl.pathname;
+// SERVIDOR HTTP CON HEADER OBLIGATORIO
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    // Simulando la inclusión del header solicitado
+    res.write(`
+        <html>
+        <head><title>Panel ONE4CARS</title></head>
+        <body style="margin:0; font-family:sans-serif;">
+            <div id="header-php" style="background:#000; color:#fff; padding:15px; text-align:center;">
+                <h2>ONE4CARS - GESTIÓN DE IMPORTACIONES</h2>
+            </div>
+            <div style="text-align:center; padding:50px;">
+    `);
 
-    if (path === '/cobranza') {
-        const deudores = await cobranza.obtenerListaDeudores();
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.write(`<h1>Panel ONE4CARS</h1><p>Clientes con deuda: ${deudores.length}</p><a href="/">Ver QR</a>`);
-        res.end();
-    } 
-    else {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        if (qrCodeData.includes("data:image")) {
-            res.write(`<center><h1>Escanea ONE4CARS AI</h1><img src="${qrCodeData}"></center>`);
-        } else {
-            res.write(`<center><h1>${qrCodeData || "Iniciando..."}</h1></center>`);
-        }
-        res.end();
+    if (qrCodeData.includes("data:image")) {
+        res.write(`<h1>Conectar WhatsApp</h1><img src="${qrCodeData}" width="300">`);
+    } else {
+        res.write(`<h1>Estado: ${qrCodeData || "Iniciando..."}</h1>`);
     }
-}).listen(port, '0.0.0.0');
+
+    res.write(`</div></body></html>`);
+    res.end();
+}).listen(port);
 
 startBot();
