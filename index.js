@@ -7,8 +7,11 @@ const pino = require('pino');
 const cobranza = require('./cobranza');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
+// --- MEMORIA TEMPORAL PARA EVITAR REPETICIONES ---
+const historialRespuestas = new Map();
+const TIEMPO_ESPERA = 5 * 60 * 1000; // 5 minutos para repetir el menú automático
+
 // --- CONFIGURACIÓN GEMINI DESDE RENDER ---
-// Tomamos la clave de las variables de entorno
 const apiKey = process.env.GEMINI_API_KEY;
 let model = null;
 
@@ -61,8 +64,10 @@ async function startBot() {
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         const bodyLower = body.toLowerCase();
 
-        // --- 1. RESPUESTAS EXACTAS (LINKS DIRECTOS) ---
-        // Estas tienen prioridad para ser rápidas y precisas
+        // --- VALIDACIÓN DE REPETICIÓN ---
+        const ahora = Date.now();
+        const ultimaVez = historialRespuestas.get(from) || 0;
+
         const respuestasFijas = {
             'medios de pago': 'Estimado cliente, acceda al siguiente enlace para ver nuestras formas de pago actualizadas:\n\n🔗 https://www.one4cars.com/medios_de_pago.php/',
             'estado de cuenta': 'Estimado cliente, puede consultar su estado de cuenta detallado en el siguiente link:\n\n🔗 https://www.one4cars.com/estado_de_cuenta.php/',
@@ -77,20 +82,23 @@ async function startBot() {
 
         let respondido = false;
 
-        // Verificamos si el mensaje contiene alguna palabra clave exacta
+        // 1. Verificamos si el mensaje contiene alguna palabra clave exacta (Estas siempre responden)
         for (const [key, val] of Object.entries(respuestasFijas)) {
             if (bodyLower.includes(key)) {
                 await sock.sendMessage(from, { text: "🚗 *SOPORTE ONE4CARS*\n________________________\n\n" + val });
+                historialRespuestas.set(from, ahora); 
                 respondido = true;
                 break;
             }
         }
 
-        // --- 2. INTELIGENCIA ARTIFICIAL (GEMINI) ---
-        // Si no es un comando de link, usamos Gemini para saludar o responder dudas
+        // 2. IA / MENÚ (Solo si no ha respondido recientemente)
         if (!respondido && body.length > 0 && model) {
+            
+            // Si ya se le respondió hace menos del TIEMPO_ESPERA, ignoramos para no ser spam
+            if (ahora - ultimaVez < TIEMPO_ESPERA) return;
+
             try {
-                // Notificar "escribiendo..." en WhatsApp
                 await sock.sendPresenceUpdate('composing', from);
 
                 const prompt = `
@@ -100,7 +108,7 @@ async function startBot() {
 
                 INSTRUCCIONES:
                 1. Sé muy cordial, profesional y usa emojis (🚗, 🔧, ✅).
-                2. Si el usuario saluda (hola, buenos días) o pregunta qué puedes hacer, preséntate brevemente y muestra ESTE MENÚ EXACTO numerado:
+                2. Si el usuario saluda o pregunta qué puedes hacer, muestra ESTE MENÚ EXACTO:
 
                    *MENÚ PRINCIPAL ONE4CARS*
                    1. 🏦 Medios de Pago
@@ -113,30 +121,22 @@ async function startBot() {
                    8. 🚚 Despacho
                    9. 👤 Asesor
 
-                   Invita al usuario a escribir el nombre de la opción.
-
-                3. Si el usuario hace una pregunta general, responde basándote en que vendemos repuestos y recuérdale ver la "Lista de Precios".
-                4. Mantén la respuesta breve.
-                `;
+                3. Mantén la respuesta breve.`;
 
                 const result = await model.generateContent(prompt);
-                const response = result.response;
-                const text = response.text();
+                const text = result.response.text();
 
                 await sock.sendMessage(from, { text: text });
+                historialRespuestas.set(from, ahora);
 
             } catch (error) {
                 console.error("Error Gemini:", error);
-                // Si falla la IA (por límite de cuota o error), enviamos un mensaje genérico
-                await sock.sendMessage(from, { 
-                    text: "¡Hola! Bienvenido a *ONE4CARS* 🚗\n\nPor favor escribe una de estas opciones para ayudarte:\n\n1. Medios de Pago\n2. Estado de Cuenta\n3. Lista de Precios\n4. Tomar Pedido\n5. Mis Clientes\n6. Afiliar Cliente\n7. Ficha Producto\n8. Despacho\n9. Asesor" 
-                });
             }
         }
     });
 }
 
-// --- SERVIDOR WEB (COBRANZA + QR) ---
+// --- SERVIDOR WEB ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
@@ -147,17 +147,15 @@ http.createServer(async (req, res) => {
         const deudores = await cobranza.obtenerListaDeudores(parsedUrl.query);
 
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        // HTML Resumido (Funcionalidad intacta)
         res.write(`
             <html>
             <head>
                 <title>ONE4CARS - Cobranza</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-                <style>body{background:#f8f9fa} .container{margin-top:20px; background:white; padding:20px; border-radius:10px; box-shadow:0 0 10px rgba(0,0,0,0.1)}</style>
             </head>
-            <body>
-                <div class="container">
+            <body class="bg-light">
+                <div class="container mt-4 bg-white p-4 rounded shadow-sm">
                     <div class="d-flex justify-content-between align-items-center">
                         <h2>📊 Panel de Cobranza</h2>
                         <a href="/" class="btn btn-sm btn-outline-secondary">Volver al QR</a>
