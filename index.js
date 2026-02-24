@@ -86,16 +86,33 @@ async function startBot() {
         if (!userText) return;
 
         try {
+            // Indicamos que el bot está procesando
             await sock.sendPresenceUpdate('composing', from);
-            // Llamada a Gemini 3 con thinking_level low para velocidad
+
+            // --- CORRECCIÓN DE ESTRUCTURA PARA GEMINI 3 ---
             const result = await model.generateContent({
-                contents: [{ role: "user", parts: [{ text: `${SYSTEM_PROMPT}\n\nCliente: ${userText}` }] }],
-                config: { thinking_config: { thinking_level: "low" } }
+                contents: [{ 
+                    role: "user", 
+                    parts: [{ text: `${SYSTEM_PROMPT}\n\nCliente: ${userText}` }] 
+                }],
+                // Cambiamos "config" por la estructura correcta de Gemini 3
+                generationConfig: {
+                    thinkingConfig: {
+                        include_thoughts: false // No queremos ver el proceso interno en el chat
+                    }
+                }
             });
+
             const text = result.response.text();
             await sock.sendMessage(from, { text: text });
+
         } catch (e) {
             console.error("Error IA:", e.message);
+            // Si hay error, enviamos un mensaje y quitamos el "escribiendo"
+            await sock.sendMessage(from, { text: "Lo siento, hubo un inconveniente técnico. Por favor, intente de nuevo en un momento." });
+        } finally {
+            // Siempre intentamos quitar el estado de escribiendo al terminar
+            await sock.sendPresenceUpdate('paused', from);
         }
     });
 }
