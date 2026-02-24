@@ -4,19 +4,21 @@ const qrcode = require('qrcode');
 const http = require('http');
 const url = require('url');
 const pino = require('pino');
-const cobranza = require('./cobranza');
+const cobranza = require('./cobranza'); // Importante: mantiene tu lógica de cobranza.js
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// --- MEMORIA PARA EVITAR BUCLES ---
-const historialRespuestas = new Map();
-const TIEMPO_ESPERA_MENU = 3 * 60 * 1000; // 3 minutos para volver a mostrar el menú automático
+// --- MEMORIA PARA EVITAR REPETICIONES ---
+const historialRespuestasIA = new Map();
 
+// --- CONFIGURACIÓN GEMINI ---
 const apiKey = process.env.GEMINI_API_KEY;
 let model = null;
 
 if (apiKey) {
     const genAI = new GoogleGenerativeAI(apiKey);
     model = genAI.getGenerativeModel({ model: "gemini-pro" });
+} else {
+    console.error("❌ ERROR: No se encontró la variable GEMINI_API_KEY en Render.");
 }
 
 let qrCodeData = "";
@@ -61,7 +63,7 @@ async function startBot() {
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         const bodyLower = body.toLowerCase();
 
-        // 1. RESPUESTAS FIJAS (ESTO SIEMPRE FUNCIONA, NO SE BLOQUEA)
+        // --- 1. RESPUESTAS EXACTAS (LINKS DIRECTOS) ---
         const respuestasFijas = {
             'medios de pago': 'Estimado cliente, acceda al siguiente enlace para ver nuestras formas de pago actualizadas:\n\n🔗 https://www.one4cars.com/medios_de_pago.php/',
             'estado de cuenta': 'Estimado cliente, puede consultar su estado de cuenta detallado en el siguiente link:\n\n🔗 https://www.one4cars.com/estado_de_cuenta.php/',
@@ -84,30 +86,36 @@ async function startBot() {
             }
         }
 
-        // 2. INTELIGENCIA ARTIFICIAL (CON FILTRO DE TIEMPO)
+        // --- 2. INTELIGENCIA ARTIFICIAL (CON FILTRO PARA NO REPETIR) ---
         if (!respondido && body.length > 0 && model) {
             const ahora = Date.now();
-            const ultimaRespuestaIA = historialRespuestas.get(from) || 0;
+            const ultimaVez = historialRespuestasIA.get(from) || 0;
 
-            // Solo respondemos con Gemini si han pasado más de 3 minutos para evitar el "spam" del menú
-            if (ahora - ultimaRespuestaIA > TIEMPO_ESPERA_MENU) {
-                try {
-                    await sock.sendPresenceUpdate('composing', from);
-                    const prompt = `Eres el asistente virtual oficial de ONE4CARS. El usuario escribió: "${body}". Muestra el menú de opciones si es un saludo.`;
-                    const result = await model.generateContent(prompt);
-                    const text = result.response.text();
+            // Si el usuario vuelve a escribir en menos de 1 minuto, solo respondemos si es algo nuevo
+            if (ahora - ultimaVez < 60000) return; 
 
-                    await sock.sendMessage(from, { text: text });
-                    historialRespuestas.set(from, ahora); // Guardamos la marca de tiempo
-                } catch (error) {
-                    console.error("Error Gemini:", error);
-                }
+            try {
+                await sock.sendPresenceUpdate('composing', from);
+
+                const prompt = `
+                Eres el asistente virtual oficial de ONE4CARS (repuestos automotrices).
+                Tu nombre es "Bot One4Cars". El usuario escribió: "${body}".
+                Si saluda, muestra el MENÚ PRINCIPAL (Medios de Pago, Estado de Cuenta, Lista de Precios, Tomar Pedido, Mis Clientes, Afiliar Cliente, Ficha Producto, Despacho, Asesor).`;
+
+                const result = await model.generateContent(prompt);
+                const text = result.response.text();
+
+                await sock.sendMessage(from, { text: text });
+                historialRespuestasIA.set(from, ahora); // Guardar marca de tiempo
+
+            } catch (error) {
+                console.error("Error Gemini:", error);
             }
         }
     });
 }
 
-// --- SERVIDOR WEB (LÍNEAS RESTAURADAS) ---
+// --- SERVIDOR WEB COMPLETO (RESTAURADO) ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
@@ -124,9 +132,10 @@ http.createServer(async (req, res) => {
                 <title>ONE4CARS - Cobranza</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+                <style>body{background:#f8f9fa} .container{margin-top:20px; background:white; padding:20px; border-radius:10px; box-shadow:0 0 10px rgba(0,0,0,0.1)}</style>
             </head>
-            <body class="bg-light">
-                <div class="container mt-4 bg-white p-4 rounded shadow-sm">
+            <body>
+                <div class="container">
                     <div class="d-flex justify-content-between align-items-center">
                         <h2>📊 Panel de Cobranza</h2>
                         <a href="/" class="btn btn-sm btn-outline-secondary">Volver al QR</a>
