@@ -33,7 +33,7 @@ REGLAS:
 
 // Inicializar modelo con configuración de seguridad
 const modelIA = genAI.getGenerativeModel({ 
-    model: "gemini-2.0-flash"
+    model: "gemini-2.5-flash"
 });
 
 let qrCodeData = "";
