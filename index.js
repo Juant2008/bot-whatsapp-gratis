@@ -7,6 +7,7 @@ const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
+// --- CONFIGURACIÓN IA ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
@@ -29,15 +30,33 @@ Proporciona respuestas útiles y usa siempre estos enlaces:
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
-    const sock = makeWASocket({ version, auth: state, logger: pino({ level: 'error' }), browser: ["ONE4CARS", "Chrome", "1.0.0"] });
+    
+    const sock = makeWASocket({ 
+        version, 
+        auth: state, 
+        logger: pino({ level: 'silent' }), // Bajamos el ruido de logs
+        browser: ["ONE4CARS", "Chrome", "1.0.0"],
+        markOnlineOnConnect: true
+    });
+
     socketBot = sock;
     sock.ev.on('creds.update', saveCreds);
+
     sock.ev.on('connection.update', (u) => {
-        if (u.qr) qrcode.toDataURL(u.qr, (err, url) => qrCodeData = url);
-        if (u.connection === 'open') qrCodeData = "ONLINE ✅";
-        if (u.connection === 'close') {
-            const code = (u.lastDisconnect.error instanceof Boom)?.output?.statusCode;
-            if (code !== DisconnectReason.loggedOut) startBot();
+        const { connection, lastDisconnect, qr } = u;
+        if (qr) qrcode.toDataURL(qr, (err, url) => qrCodeData = url);
+        
+        if (connection === 'open') {
+            qrCodeData = "ONLINE ✅";
+            console.log("Conexión exitosa con WhatsApp");
+        }
+        
+        if (connection === 'close') {
+            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) {
+                console.log("Reconectando...");
+                setTimeout(startBot, 5000);
+            }
         }
     });
 
@@ -45,16 +64,38 @@ async function startBot() {
         if (type !== 'notify') return;
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
+
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+        if (text.length < 2) return; // Evita procesar emojis o textos vacíos que dan error de IA
+
         try {
-            const r = await model.generateContent(`${knowledgeBase}\nCliente dice: ${text}`);
-            await sock.sendMessage(msg.key.remoteJid, { text: r.response.text() });
-        } catch (e) { console.log("Error IA"); }
+            const prompt = `${knowledgeBase}\n\nCliente pregunta: "${text}"\nRespuesta amable:`;
+            const result = await model.generateContent(prompt);
+            const response = await result.response;
+            const textReply = response.text();
+            
+            await sock.sendMessage(msg.key.remoteJid, { text: textReply });
+        } catch (e) {
+            console.log("Error en respuesta de IA - Posible texto inválido o API ocupada");
+        }
     });
 }
 
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
+    
+    // HEADER PHP SIMULADO (SEGÚN INSTRUCCIONES)
+    const header = `
+        <header class="p-3 mb-4 border-bottom bg-dark text-white">
+            <div class="container d-flex justify-content-between align-items-center">
+                <h4 class="m-0">📦 ONE4CARS System</h4>
+                <nav>
+                    <a href="/" class="text-white me-3 text-decoration-none">Estado Bot</a>
+                    <a href="/cobranza" class="btn btn-primary btn-sm">Panel Cobranza</a>
+                </nav>
+            </div>
+        </header>`;
+
     if (parsedUrl.pathname === '/cobranza') {
         try {
             const v = await cobranza.obtenerVendedores();
@@ -62,33 +103,51 @@ const server = http.createServer(async (req, res) => {
             const d = await cobranza.obtenerListaDeudores(parsedUrl.query);
 
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.write(`<html><head><title>ONE4CARS</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head><body class="bg-light">
-                <div class="container bg-white shadow p-4 mt-3 rounded">
-                    <header class="mb-4 border-bottom pb-2"><h3>🚗 ONE4CARS - Panel de Cobranza</h3></header>
-                    <form class="row g-2 mb-4">
-                        <div class="col-md-4"><select name="vendedor" class="form-select"><option value="">Vendedor</option>${v.map(i=>`<option value="${i.nombre}">${i.nombre}</option>`)}</select></div>
-                        <div class="col-md-4"><select name="zona" class="form-select"><option value="">Zona</option>${z.map(i=>`<option value="${i.zona}">${i.zona}</option>`)}</select></div>
-                        <div class="col-md-2"><input type="number" name="dias" class="form-control" placeholder="Días" value="${parsedUrl.query.dias || 0}"></div>
-                        <div class="col-md-2"><button class="btn btn-primary w-100">Filtrar</button></div>
-                    </form>
-                    <div class="table-responsive" style="max-height:450px;"><table class="table table-sm table-hover">
-                        <thead class="table-dark"><tr><th><input type="checkbox" id="all"></th><th>Cliente</th><th>Factura</th><th>Saldo $</th><th>Días</th></tr></thead>
-                        <tbody>${d.map(i=>`<tr><td><input type="checkbox" class="rowCheck" value='${JSON.stringify(i)}'></td><td><small>${i.nombres}</small></td><td><small>${i.nro_factura}</small></td><td class="text-danger"><b>$${parseFloat(i.saldo_pendiente).toFixed(2)}</b></td><td>${i.dias_transcurridos}</td></tr>`).join('')}</tbody>
-                    </table></div>
-                    <button onclick="enviar()" id="btn" class="btn btn-success w-100 py-3 mt-3 fw-bold">🚀 ENVIAR WHATSAPP</button>
-                </div>
-                <script>
-                    document.getElementById('all').onclick = function() { document.querySelectorAll('.rowCheck').forEach(c => c.checked = this.checked); }
-                    async function enviar() {
-                        const sel = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
-                        if(sel.length === 0) return alert('Seleccione clientes');
-                        document.getElementById('btn').disabled = true;
-                        await fetch('/enviar-cobranza', { method:'POST', body: JSON.stringify({facturas:sel}) });
-                        alert('Envío en proceso...');
-                    }
-                </script></body></html>`);
+            res.write(`
+                <html>
+                <head>
+                    <title>Cobranza - ONE4CARS</title>
+                    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+                </head>
+                <body class="bg-light">
+                    ${header}
+                    <div class="container bg-white shadow p-4 rounded">
+                        <form class="row g-2 mb-4">
+                            <div class="col-md-4"><select name="vendedor" class="form-select"><option value="">Vendedor</option>${v.map(i=>`<option value="${i.nombre}">${i.nombre}</option>`)}</select></div>
+                            <div class="col-md-4"><select name="zona" class="form-select"><option value="">Zona</option>${z.map(i=>`<option value="${i.zona}">${i.zona}</option>`)}</select></div>
+                            <div class="col-md-2"><input type="number" name="dias" class="form-control" placeholder="Días" value="${parsedUrl.query.dias || 0}"></div>
+                            <div class="col-md-2"><button class="btn btn-primary w-100">Filtrar</button></div>
+                        </form>
+                        <div class="table-responsive" style="max-height:500px;">
+                            <table class="table table-sm table-hover">
+                                <thead class="table-dark">
+                                    <tr><th><input type="checkbox" id="all"></th><th>Cliente</th><th>Factura</th><th>Saldo $</th><th>Días</th></tr>
+                                </thead>
+                                <tbody>
+                                    ${d.map(i=>`<tr><td><input type="checkbox" class="rowCheck" value='${JSON.stringify(i)}'></td><td><small>${i.nombres}</small></td><td><small>${i.nro_factura}</small></td><td class="text-danger"><b>$${parseFloat(i.saldo_pendiente).toFixed(2)}</b></td><td><span class="badge bg-warning text-dark">${i.dias_transcurridos}</span></td></tr>`).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        <button onclick="enviar()" id="btn" class="btn btn-success w-100 py-3 mt-3 fw-bold">🚀 ENVIAR WHATSAPP SELECCIONADOS</button>
+                    </div>
+                    <script>
+                        document.getElementById('all').onclick = function() { document.querySelectorAll('.rowCheck').forEach(c => c.checked = this.checked); }
+                        async function enviar() {
+                            const sel = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
+                            if(sel.length === 0) return alert('Seleccione clientes');
+                            const btn = document.getElementById('btn');
+                            btn.disabled = true; btn.innerText = 'PROCESANDO ENVÍO...';
+                            await fetch('/enviar-cobranza', { method:'POST', body: JSON.stringify({facturas:sel}) });
+                            alert('Envío de mensajes iniciado.');
+                            btn.disabled = false; btn.innerText = '🚀 ENVIAR WHATSAPP SELECCIONADOS';
+                        }
+                    </script>
+                </body>
+                </html>`);
             res.end();
-        } catch (e) { res.end("Error al cargar datos. Verifique columnas."); }
+        } catch (e) {
+            res.end(`Error: ${e.message}`);
+        }
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', () => {
@@ -98,7 +157,15 @@ const server = http.createServer(async (req, res) => {
         });
     } else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<center style="margin-top:50px;"><h1>ONE4CARS BOT</h1>${qrCodeData.startsWith('data')?`<img src="${qrCodeData}">`:`<h3>${qrCodeData||"Cargando..."}</h3>`}<br><br><a href="/cobranza" class="btn btn-primary">Panel de Cobranza</a></center>`);
+        res.end(`
+            <html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+            <body class="bg-light">
+                ${header}
+                <center style="margin-top:50px;">
+                    <h1>Estatus del Bot</h1>
+                    <div class="mt-4">${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" class="border p-2 bg-white shadow">` : `<h3 class="text-success">${qrCodeData || "Iniciando..."}</h3>`}</div>
+                </center>
+            </body></html>`);
     }
 });
 
