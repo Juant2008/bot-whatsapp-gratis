@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+   const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
@@ -15,10 +15,10 @@ let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-// --- CEREBRO DE LA IA (9 OPCIONES COMPLETAS) ---
+// --- CEREBRO DE LA IA (9 OPCIONES RESTAURADAS AL 100%) ---
 const knowledgeBase = `
 Eres el asistente virtual de ONE4CARS. Tu objetivo es atender al cliente de forma amable, corta y precisa.
-IMPORTANTE: Si el cliente pregunta por estos temas, responde con los enlaces exactos:
+IMPORTANTE: Si el cliente pregunta por estos temas, DEBES responder con el enlace exacto:
 
 1. 'medios de pago' o 'como pagar':
    "Estimado cliente, acceda al siguiente enlace para ver nuestras formas de pago actualizadas:\n\n🔗 https://www.one4cars.com/medios_de_pago.php/"
@@ -46,6 +46,8 @@ IMPORTANTE: Si el cliente pregunta por estos temas, responde con los enlaces exa
 
 9. 'asesor' o 'humano':
    "Entendido. En un momento uno de nuestros asesores humanos revisará su caso y le contactará de forma manual. Gracias por su paciencia."
+
+Si el usuario saluda, responde cortésmente. Si pregunta algo fuera de estos 9 puntos, indica que un asesor humano lo contactará pronto. No inventes links.
 `;
 
 async function startBot() {
@@ -86,20 +88,20 @@ async function startBot() {
         if (!body) return;
 
         try {
-            const prompt = `${knowledgeBase}\n\nCliente dice: "${body}"\n\nRespuesta:`;
+            const prompt = `${knowledgeBase}\n\nCliente: "${body}"\nRespuesta:`;
             const result = await model.generateContent(prompt);
-            await sock.sendMessage(from, { text: result.response.text() });
-        } catch (error) {
-            console.error("Error IA:", error);
-        }
+            const response = await result.response;
+            await sock.sendMessage(from, { text: response.text() });
+        } catch (error) { console.error("Error Gemini"); }
     });
 }
 
-// --- SERVIDOR HTTP ---
+// --- SERVIDOR HTTP ÚNICO Y COMPLETO ---
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
 
+    // RUTA 1: PANEL DE COBRANZA (TODO EL HTML Y LÓGICA)
     if (path === '/cobranza') {
         const vendedores = await cobranza.obtenerVendedores();
         const zonas = await cobranza.obtenerZonas();
@@ -109,86 +111,97 @@ const server = http.createServer(async (req, res) => {
         res.write(`
             <html>
             <head>
+                <title>ONE4CARS - Cobranza</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-                <title>Cobranza ONE4CARS</title>
             </head>
             <body class="bg-light p-2">
-                <div class="container bg-white shadow-sm p-3 rounded mt-2">
+                <div class="container bg-white shadow-sm p-3 rounded mt-2" style="max-width: 900px;">
                     <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h5 class="mb-0">📊 Cobranza ONE4CARS</h5>
-                        <a href="/" class="btn btn-sm btn-outline-secondary">Inicio</a>
+                        <h5 class="mb-0 text-primary">📊 Panel Cobranza ONE4CARS</h5>
+                        <a href="/" class="btn btn-sm btn-outline-secondary">Volver</a>
                     </div>
                     
                     <form method="GET" class="row g-2 mb-3">
                         <div class="col-6">
                             <select name="vendedor" class="form-select form-select-sm">
-                                <option value="">Vendedor</option>
+                                <option value="">Todos los Vendedores</option>
                                 ${vendedores.map(v => `<option value="${v.nombre}" ${parsedUrl.query.vendedor === v.nombre ? 'selected' : ''}>${v.nombre}</option>`).join('')}
                             </select>
                         </div>
                         <div class="col-6">
                             <select name="zona" class="form-select form-select-sm">
-                                <option value="">Zona</option>
+                                <option value="">Todas las Zonas</option>
                                 ${zonas.map(z => `<option value="${z.zona}" ${parsedUrl.query.zona === z.zona ? 'selected' : ''}>${z.zona}</option>`).join('')}
                             </select>
                         </div>
                         <div class="col-6">
-                            <input type="number" name="dias" class="form-control form-control-sm" placeholder="Días mín." value="${parsedUrl.query.dias || 0}">
+                            <input type="number" name="dias" class="form-control form-control-sm" placeholder="Mínimo días" value="${parsedUrl.query.dias || 0}">
                         </div>
-                        <div class="col-6"><button type="submit" class="btn btn-primary btn-sm w-100">Filtrar</button></div>
+                        <div class="col-6">
+                            <button type="submit" class="btn btn-primary btn-sm w-100">Filtrar Lista</button>
+                        </div>
                     </form>
 
-                    <form id="formEnvio">
-                        <div class="table-responsive" style="max-height: 400px;">
+                    <form id="formMasivo">
+                        <div class="table-responsive" style="max-height: 500px;">
                             <table class="table table-sm table-hover border">
-                                <thead class="table-light sticky-top">
+                                <thead class="table-dark sticky-top">
                                     <tr>
-                                        <th><input type="checkbox" id="selectAll" class="form-check-input"></th>
-                                        <th>Cliente</th>
+                                        <th><input type="checkbox" id="masterCheck" class="form-check-input"></th>
+                                        <th>Cliente / Factura</th>
                                         <th>Saldo ($)</th>
+                                        <th>Días</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${deudores.map(d => `
                                         <tr>
                                             <td><input type="checkbox" name="f" class="rowCheck form-check-input" value='${JSON.stringify(d)}'></td>
-                                            <td><small>${d.nombres}</small></td>
+                                            <td><small><b>${d.nombres}</b><br><span class="text-muted">#${d.nro_factura}</span></small></td>
                                             <td class="text-danger"><b>${parseFloat(d.saldo_pendiente).toFixed(2)}</b></td>
+                                            <td><span class="badge ${d.dias_transcurridos > 30 ? 'bg-danger' : 'bg-warning text-dark'}">${d.dias_transcurridos}d</span></td>
                                         </tr>
                                     `).join('')}
                                 </tbody>
                             </table>
                         </div>
-                        <button type="button" onclick="enviarMensajes()" id="btnEnviar" class="btn btn-success w-100 mt-3 py-2 fw-bold">🚀 ENVIAR WHATSAPP</button>
+                        <button type="button" onclick="enviar()" id="btnEnviar" class="btn btn-success w-100 mt-3 py-2 fw-bold">🚀 ENVIAR WHATSAPP SELECCIONADOS</button>
                     </form>
                 </div>
                 <script>
-                    document.getElementById('selectAll').onclick = function() {
+                    document.getElementById('masterCheck').onclick = function() {
                         const checks = document.querySelectorAll('.rowCheck');
                         for (const c of checks) c.checked = this.checked;
                     }
-                    async function enviarMensajes() {
-                        const selected = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
-                        if (selected.length === 0) return alert('Seleccione al menos un cliente');
+                    async function enviar() {
+                        const seleccionados = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
+                        if (seleccionados.length === 0) return alert('Seleccione al menos un cliente de la lista.');
+                        if (!confirm('¿Desea enviar recordatorio a ' + seleccionados.length + ' clientes?')) return;
+                        
                         const btn = document.getElementById('btnEnviar');
-                        btn.disabled = true; btn.innerText = 'Enviando...';
+                        btn.disabled = true; btn.innerText = 'PROCESANDO ENVÍOS...';
+                        
                         try {
                             const res = await fetch('/enviar-cobranza', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ facturas: selected })
+                                body: JSON.stringify({ facturas: seleccionados })
                             });
-                            alert(await res.text());
-                        } catch(e) { alert('Error'); }
-                        btn.disabled = false; btn.innerText = '🚀 ENVIAR WHATSAPP';
+                            const txt = await res.text();
+                            alert(txt);
+                        } catch(e) { alert('Error de conexión con el servidor.'); }
+                        
+                        btn.disabled = false; btn.innerText = '🚀 ENVIAR WHATSAPP SELECCIONADOS';
                     }
                 </script>
             </body>
             </html>
         `);
         res.end();
-    } else if (path === '/enviar-cobranza' && req.method === 'POST') {
+    } 
+    // RUTA 2: PROCESAMIENTO DE ENVÍO
+    else if (path === '/enviar-cobranza' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', async () => {
@@ -196,26 +209,37 @@ const server = http.createServer(async (req, res) => {
                 const data = JSON.parse(body);
                 if (socketBot && data.facturas) {
                     cobranza.ejecutarEnvioMasivo(socketBot, data.facturas);
-                    res.end('Envío masivo iniciado...');
+                    res.writeHead(200); res.end('Cola de envío iniciada con éxito.');
                 } else {
-                    res.end('Error: Bot desconectado');
+                    res.writeHead(400); res.end('Error: WhatsApp no vinculado.');
                 }
-            } catch(e) { res.end('Error'); }
+            } catch(e) { res.writeHead(500); res.end('Error en el proceso.'); }
         });
-    } else {
+    }
+    // RUTA 3: HOME (QR O STATUS)
+    else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (qrCodeData.includes("data:image")) {
-            res.write('<center style="margin-top:50px;"><h3>Escanea ONE4CARS</h3><img src="' + qrCodeData + '" width="300"><br><br><a href="/cobranza" style="color:blue; font-weight:bold;">IR AL PANEL</a></center>');
+            res.write(`
+                <html>
+                <body style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; font-family:sans-serif;">
+                    <h2>Vincular ONE4CARS</h2>
+                    <img src="${qrCodeData}" style="border: 10px solid #eee; border-radius:15px; width:300px;">
+                    <p style="color:red;">Escanea con WhatsApp</p>
+                    <a href="/cobranza" style="margin-top:20px; text-decoration:none; color:blue; font-weight:bold;">IR AL PANEL DE COBRANZA</a>
+                </body>
+                </html>
+            `);
         } else {
             res.write(`
                 <html>
                 <head><meta name="viewport" content="width=device-width, initial-scale=1">
                 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
                 <body class="d-flex align-items-center justify-content-center vh-100 bg-light text-center">
-                    <div class="p-4 shadow-sm bg-white rounded w-75">
-                        <h1 class="h4 mb-4">🚀 ONE4CARS Bot</h1>
-                        <span class="badge bg-success mb-4 p-2">${qrCodeData || "Iniciando..."}</span>
-                        <a href="/cobranza" class="btn btn-primary btn-lg w-100">ENTRAR A COBRANZA</a>
+                    <div class="p-4 shadow bg-white rounded w-75">
+                        <h4 class="mb-4">🚀 ONE4CARS Bot</h4>
+                        <span class="badge bg-success mb-4 p-2 fs-6">${qrCodeData}</span>
+                        <a href="/cobranza" class="btn btn-primary btn-lg w-100 shadow-sm">ENTRAR A COBRANZA</a>
                     </div>
                 </body>
                 </html>
@@ -225,8 +249,9 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
+// SOLO UN LISTEN EN TODO EL PROGRAMA
 server.listen(port, '0.0.0.0', () => {
-    console.log("Servidor activo en puerto " + port);
+    console.log(`[ONE4CARS] Escuchando en puerto ${port}`);
 });
 
 startBot();
