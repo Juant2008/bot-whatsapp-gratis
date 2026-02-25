@@ -4,61 +4,36 @@ const qrcode = require('qrcode');
 const http = require('http');
 const url = require('url');
 const pino = require('pino');
-const { GoogleGenerativeAI } = require("@google/generative-ai"); // Importamos la IA
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// --- CONFIGURACIÓN ---
-// Asegúrate de poner la variable GEMINI_API_KEY en Render
+// --- CONFIGURACIÓN IA ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
-// Intentamos cargar cobranza si existe, si no, no rompemos el bot
+// Cargamos cobranza de forma segura
 let cobranza;
 try {
     cobranza = require('./cobranza');
 } catch (e) {
-    console.log("Módulo cobranza no encontrado o con error, continuando sin él.");
+    console.log("Módulo cobranza no encontrado.");
 }
 
 let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-// --- CEREBRO DE LA IA (Tus respuestas y links) ---
 const knowledgeBase = `
 Eres el asistente virtual de ONE4CARS. Tu objetivo es atender al cliente de forma amable, corta y precisa.
-IMPORTANTE: Si el cliente pregunta por uno de los siguientes temas, DEBES responder con el texto y el enlace exacto que se indica a continuación:
-
-1. 'medios de pago' o 'como pagar':
-   "Estimado cliente, acceda al siguiente enlace para ver nuestras formas de pago actualizadas:\n\n🔗 https://www.one4cars.com/medios_de_pago.php/"
-
-2. 'estado de cuenta' o 'cuanto debo':
-   "Estimado cliente, puede consultar su estado de cuenta detallado en el siguiente link:\n\n🔗 https://www.one4cars.com/estado_de_cuenta.php/"
-
-3. 'lista de precios' o 'precios':
-   "Estimado cliente, descargue nuestra lista de precios más reciente aquí:\n\n🔗 https://www.one4cars.com/lista_de_precios.php/"
-
-4. 'tomar pedido' o 'hacer pedido':
-   "Estimado cliente, inicie la carga de su pedido de forma rápida aquí:\n\n🔗 https://www.one4cars.com/tomar_pedido.php/"
-
-5. 'mis clientes' o 'cartera':
-   "Estimado, gestione su cartera de clientes en el siguiente apartado:\n\n🔗 https://www.one4cars.com/mis_clientes.php/"
-
-6. 'afiliar cliente':
-   "Estimado, para afiliar nuevos clientes por favor ingrese al siguiente link:\n\n🔗 https://www.one4cars.com/afiliar_clientes.php/"
-
-7. 'ficha producto' o 'tecnica':
-   "Estimado cliente, consulte las especificaciones y fichas técnicas aquí:\n\n🔗 https://www.one4cars.com/consulta_productos.php/"
-
-8. 'despacho', 'envio' o 'seguimiento':
-   "Estimado cliente, realice el seguimiento en tiempo real de su despacho aquí:\n\n🔗 https://www.one4cars.com/despacho.php/"
-
-9. 'asesor' o 'humano':
-   "Entendido. En un momento uno de nuestros asesores humanos revisará su caso y le contactará de forma manual. Gracias por su paciencia."
-
-REGLAS DE COMPORTAMIENTO:
-- Si el usuario saluda (hola, buenos días), responde el saludo cortésmente y pregunta en qué puedes ayudar.
-- Si el usuario pregunta algo fuera de estos temas, responde amablemente que un asesor humano lo contactará pronto.
-- No inventes enlaces. Usa solo los provistos.
+IMPORTANTE: Si el cliente pregunta por estos temas, usa estos enlaces:
+1. Medios de pago: https://www.one4cars.com/medios_de_pago.php/
+2. Estado de cuenta: https://www.one4cars.com/estado_de_cuenta.php/
+3. Lista de precios: https://www.one4cars.com/lista_de_precios.php/
+4. Tomar pedido: https://www.one4cars.com/tomar_pedido.php/
+5. Mis clientes/Cartera: https://www.one4cars.com/mis_clientes.php/
+6. Afiliar cliente: https://www.one4cars.com/afiliar_clientes.php/
+7. Ficha técnica: https://www.one4cars.com/consulta_productos.php/
+8. Despacho: https://www.one4cars.com/despacho.php/
+9. Asesor: Dile que un humano lo contactará pronto.
 `;
 
 async function startBot() {
@@ -86,7 +61,7 @@ async function startBot() {
             if (statusCode !== DisconnectReason.loggedOut) setTimeout(() => startBot(), 5000);
         } else if (connection === 'open') {
             qrCodeData = "BOT ONLINE ✅";
-            console.log('🚀 ONE4CARS Conectado con éxito');
+            console.log('🚀 ONE4CARS Conectado');
         }
     });
 
@@ -97,69 +72,97 @@ async function startBot() {
 
         const from = msg.key.remoteJid;
         const body = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
-
         if (!body) return;
 
         try {
-            // Enviamos el contexto y el mensaje a Gemini
-            const prompt = `${knowledgeBase}\n\nCliente dice: "${body}"\n\nRespuesta del Asistente:`;
+            const prompt = `${knowledgeBase}\n\nCliente dice: "${body}"\n\nRespuesta:`;
             const result = await model.generateContent(prompt);
             const response = await result.response;
-            const textResponse = response.text();
-
-            await sock.sendMessage(from, { text: textResponse });
+            await sock.sendMessage(from, { text: response.text() });
         } catch (error) {
             console.error("Error IA:", error);
-            // Si falla la IA, no enviamos nada o un mensaje genérico
         }
     });
 }
 
-// --- SERVIDOR HTTP (Mantiene el bot vivo en Render y muestra QR) ---
+// --- SERVIDOR HTTP CORREGIDO ---
 http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const path = parsedUrl.pathname;
 
-    // Ruta webhook (compatible con tu código anterior)
-    if (path === '/enviar-pago' && req.method === 'POST') {
+    // 1. RUTA DE COBRANZA (Para que funcione el panel)
+    if (path === '/cobranza' && cobranza) {
+        const vendedores = await cobranza.obtenerVendedores();
+        const zonas = await cobranza.obtenerZonas();
+        const deudores = await cobranza.obtenerListaDeudores(parsedUrl.query);
+
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        // Aquí enviamos el HTML que tenías en tu archivo original para que se vea la tabla
+        res.write(`
+            <html>
+            <head>
+                <title>ONE4CARS - Cobranza</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+            </head>
+            <body class="p-3">
+                <div class="container bg-white shadow-sm p-3 rounded">
+                    <h3>📊 Panel de Cobranza</h3>
+                    <hr>
+                    <form method="GET" class="row g-2 mb-3">
+                        <div class="col-6"><input type="number" name="dias" class="form-control" placeholder="Días" value="${parsedUrl.query.dias || 0}"></div>
+                        <div class="col-6"><button class="btn btn-primary w-100">Filtrar</button></div>
+                    </form>
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead><tr><th>Cliente</th><th>Saldo</th></tr></thead>
+                            <tbody>
+                                ${deudores.map(d => `<tr><td>${d.nombres}</td><td class="text-danger">$${parseFloat(d.saldo_pendiente).toFixed(2)}</td></tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    <a href="/" class="btn btn-secondary w-100 mt-2">Volver</a>
+                </div>
+            </body>
+            </html>
+        `);
+        res.end();
+    } 
+    // 2. RUTA PARA ENVIAR (POST)
+    else if (path === '/enviar-cobranza' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });
         req.on('end', async () => {
-            console.log("Pago recibido webhook:", body);
-            res.writeHead(200); res.end('Recibido');
+            const data = JSON.parse(body);
+            if (socketBot) {
+                cobranza.ejecutarEnvioMasivo(socketBot, data.facturas);
+                res.end('Iniciado');
+            }
         });
-    } else if (path === '/cobranza' && cobranza) {
-         // Si tienes lógica en cobranza.js, aquí se conectaría
-         res.writeHead(200); res.end('Modulo Cobranza Activo');
-    } else {
+    }
+    // 3. PÁGINA PRINCIPAL (QR O BOTÓN)
+    else {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         if (qrCodeData.includes("data:image")) {
-            res.write(`<center style="margin-top:50px;"><h1>Escanea ONE4CARS</h1><img src="${qrCodeData}" width="300"><br><p>Recarga la página si expira</p></center>`);
+            res.write(`<center style="margin-top:50px;"><h1>Escanea ONE4CARS</h1><img src="${qrCodeData}" width="300"></center>`);
         } else {
-            res.write(`<center style="margin-top:100px;"><h1>${qrCodeData || "Iniciando..."}</h1></center>`);
+            res.write(`
+                <html>
+                <head><meta name="viewport" content="width=device-width, initial-scale=1">
+                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+                <body class="d-flex align-items-center justify-content-center vh-100 bg-light">
+                    <div class="text-center p-4 shadow-sm bg-white rounded">
+                        <h1 class="h4 mb-4">🚀 ONE4CARS Sistema</h1>
+                        <p class="badge bg-success fs-6">${qrCodeData || "Iniciando..."}</p>
+                        <br><br>
+                        <a href="/cobranza" class="btn btn-primary btn-lg w-100">ENTRAR A COBRANZA</a>
+                    </div>
+                </body>
+                </html>
+            `);
         }
         res.end();
     }
 }).listen(port, '0.0.0.0');
-// Busca esta parte al final de tu index.js y reemplázala:
-else {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.write(`
-        <html>
-        <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-        </head>
-        <body class="d-flex align-items-center justify-content-center vh-100 bg-light">
-            <div class="text-center p-4 shadow-sm bg-white rounded">
-                <h1 class="h4 mb-4">🚀 ONE4CARS Sistema</h1>
-                <p class="badge bg-success fs-6">${qrCodeData || "Iniciando..."}</p>
-                <br><br>
-                <a href="/cobranza" class="btn btn-primary btn-lg w-100">ENTRAR A COBRANZA</a>
-            </div>
-        </body>
-        </html>
-    `);
-    res.end();
-}
+
 startBot();
