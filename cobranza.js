@@ -34,55 +34,52 @@ async function obtenerListaDeudores(filtros = {}) {
         const vendedor = filtros.vendedor || '';
         const zona = filtros.zona || '';
 
-        // Usamos valor_cambio de tab_monedas para el cálculo de bolívares
+        // SQL CORREGIDO: Usamos fecha_reg y valor_cambio
         let sql = `
-            SELECT celular, nombres, nro_factura, total, abono_factura,
-                   (total - abono_factura) AS saldo_pendiente, 
-                   ((total - abono_factura) * (SELECT valor_cambio FROM tab_monedas WHERE id_moneda = 2 LIMIT 1)) AS saldo_bolivares,
-                   DATEDIFF(CURDATE(), fecha_vencimiento) as dias_transcurridos 
-            FROM tab_facturas 
-            WHERE pagada = 'NO' 
-            AND (total - abono_factura) > 1 
-            AND DATEDIFF(CURDATE(), fecha_vencimiento) >= ?`;
+            SELECT f.celular, f.nombres, f.nro_factura, f.total, f.abono_factura,
+                   (f.total - f.abono_factura) AS saldo_pendiente, 
+                   ((f.total - f.abono_factura) * (SELECT valor_cambio FROM tab_monedas WHERE id_moneda = 2 LIMIT 1)) AS saldo_bolivares,
+                   DATEDIFF(CURDATE(), f.fecha_reg) as dias_transcurridos 
+            FROM tab_facturas f
+            WHERE f.pagada = 'NO' 
+            AND (f.total - f.abono_factura) > 1 
+            AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?`;
         
         let params = [minDias];
+        
         if (vendedor) { 
-            sql += ` AND id_vendedor = (SELECT id_vendedor FROM tab_vendedores WHERE nombre = ? LIMIT 1)`; 
+            sql += ` AND f.id_vendedor = (SELECT id_vendedor FROM tab_vendedores WHERE nombre = ? LIMIT 1)`; 
             params.push(vendedor); 
         }
         if (zona) { 
-            sql += ` AND id_cliente IN (SELECT id_cliente FROM tab_cliente WHERE zona = ?)`; 
+            sql += ` AND f.id_cliente IN (SELECT id_cliente FROM tab_cliente WHERE zona = ?)`; 
             params.push(zona); 
         }
         
+        sql += ` ORDER BY dias_transcurridos DESC`;
+
         const [rows] = await conn.execute(sql, params);
         return rows;
     } catch (e) { 
-        console.error("Error SQL:", e.message); 
-        return []; 
+        console.error("Error SQL Detallado:", e.message);
+        throw e; 
     } finally { if (conn) await conn.end(); }
 }
 
 async function ejecutarEnvioMasivo(sock, facturas) {
-    const excluirBolivares = ['CLIENTE_1', 'CLIENTE_2']; 
     for (const row of facturas) {
         try {
             let num = row.celular.toString().replace(/\D/g, '');
             if (!num.startsWith('58')) num = '58' + num;
             const jid = `${num}@s.whatsapp.net`;
 
-            let saldoTexto = excluirBolivares.includes(row.nombres) 
-                ? `Saldo: *Ref. ${parseFloat(row.saldo_pendiente).toFixed(2)}*`
-                : `Saldo: *Bs. ${parseFloat(row.saldo_bolivares).toFixed(2)}* (Ref. ${parseFloat(row.saldo_pendiente).toFixed(2)})`;
-
-            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe Notificamos que su Nota está pendiente:\n\nFactura: *${row.nro_factura}*\n${saldoTexto}\nPresenta: *${row.dias_transcurridos} días vencidos*\n\nPor favor, gestione su pago a la brevedad. Su crédito con nosotros es fundamental para seguir creciendo juntos.`;
+            const texto = `Hola *${row.nombres}* 🚗, de *ONE4CARS*.\n\nLe Notificamos que su Nota está pendiente:\n\nFactura: *${row.nro_factura}*\nSaldo: *Bs. ${parseFloat(row.saldo_bolivares).toFixed(2)}* (Ref. $${parseFloat(row.saldo_pendiente).toFixed(2)})\nPresenta: *${row.dias_transcurridos} días vencidos*\n\nPor favor, gestione su pago a la brevedad. Cuide su crédito.`;
             
-            if (sock && sock.sendMessage) {
+            if (sock) {
                 await sock.sendMessage(jid, { text: texto });
-                console.log(`✅ Enviado a: ${num}`);
             }
-            await new Promise(r => setTimeout(r, 10000));
-        } catch (e) { console.log("Error envío fila"); }
+            await new Promise(r => setTimeout(r, 7000));
+        } catch (e) { console.log("Error envío individual"); }
     }
 }
 
