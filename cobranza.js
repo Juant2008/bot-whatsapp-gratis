@@ -21,7 +21,7 @@ async function obtenerZonas() {
     let conn;
     try {
         conn = await mysql.createConnection(dbConfig);
-        const [rows] = await conn.execute('SELECT DISTINCT zona FROM tab_cliente WHERE zona IS NOT NULL AND zona != "" ORDER BY zona ASC');
+        const [rows] = await conn.execute('SELECT DISTINCT zona FROM tab_clientes WHERE zona IS NOT NULL AND zona != "" ORDER BY zona ASC');
         return rows;
     } catch (e) { return []; } finally { if (conn) await conn.end(); }
 }
@@ -52,7 +52,7 @@ async function obtenerListaDeudores(filtros = {}) {
             params.push(vendedor); 
         }
         if (zona) { 
-            sql += ` AND f.id_cliente IN (SELECT id_cliente FROM tab_cliente WHERE zona = ?)`; 
+            sql += ` AND f.id_cliente IN (SELECT id_cliente FROM tab_clientes WHERE zona = ?)`; 
             params.push(zona); 
         }
         
