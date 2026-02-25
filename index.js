@@ -9,7 +9,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai"); // Importamos l
 // --- CONFIGURACIÓN ---
 // Asegúrate de poner la variable GEMINI_API_KEY en Render
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
 // Intentamos cargar cobranza si existe, si no, no rompemos el bot
 let cobranza;
