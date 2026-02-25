@@ -141,5 +141,25 @@ http.createServer(async (req, res) => {
         res.end();
     }
 }).listen(port, '0.0.0.0');
-
+// Busca esta parte al final de tu index.js y reemplázala:
+else {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.write(`
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        </head>
+        <body class="d-flex align-items-center justify-content-center vh-100 bg-light">
+            <div class="text-center p-4 shadow-sm bg-white rounded">
+                <h1 class="h4 mb-4">🚀 ONE4CARS Sistema</h1>
+                <p class="badge bg-success fs-6">${qrCodeData || "Iniciando..."}</p>
+                <br><br>
+                <a href="/cobranza" class="btn btn-primary btn-lg w-100">ENTRAR A COBRANZA</a>
+            </div>
+        </body>
+        </html>
+    `);
+    res.end();
+}
 startBot();
