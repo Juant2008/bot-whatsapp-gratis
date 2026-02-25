@@ -41,7 +41,7 @@ async function obtenerListaDeudores(filtros = {}) {
                    ((f.total - f.abono_factura) * (SELECT valor_cambio FROM tab_monedas WHERE id_moneda = 2 LIMIT 1)) AS saldo_bolivares,
                    DATEDIFF(CURDATE(), f.fecha_reg) as dias_transcurridos 
             FROM tab_facturas f
-            WHERE f.pagada = 'NO' 
+            WHERE f.pagada = 'NO' and f.anulado = 'NO'
             AND (f.total - f.abono_factura) > 1 
             AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?`;
         
