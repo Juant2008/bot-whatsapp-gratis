@@ -60,23 +60,48 @@ async function startBot() {
         }
     });
 
+// --- CONFIGURACIÓN IA MEJORADA ---
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Usamos Flash que es más estable y rápido
+
+// ... (resto del código de conexión)
+
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
+        
+        // No responder a mensajes propios ni a grupos (opcional)
         if (!msg.message || msg.key.fromMe) return;
 
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-        if (text.length < 2) return; // Evita procesar emojis o textos vacíos que dan error de IA
+        const from = msg.key.remoteJid;
+        const text = (msg.message.conversation || 
+                      msg.message.extendedTextMessage?.text || 
+                      msg.message.imageMessage?.caption || "").trim();
+
+        // 1. Ignorar si el texto es muy corto o nulo
+        if (text.length < 2) return; 
 
         try {
-            const prompt = `${knowledgeBase}\n\nCliente pregunta: "${text}"\nRespuesta amable:`;
+            // 2. Limpiar el prompt para evitar caracteres extraños
+            const prompt = `${knowledgeBase}\n\nPregunta del cliente: ${text}\nRespuesta profesional:`;
+            
             const result = await model.generateContent(prompt);
             const response = await result.response;
             const textReply = response.text();
-            
-            await sock.sendMessage(msg.key.remoteJid, { text: textReply });
+
+            if (textReply) {
+                await sock.sendMessage(from, { text: textReply });
+            }
         } catch (e) {
-            console.log("Error en respuesta de IA - Posible texto inválido o API ocupada");
+            // 3. Diagnóstico preciso del error
+            console.error("--- ERROR CRÍTICO IA ---");
+            if (e.message.includes("429")) {
+                console.error("⚠️ Límite de cuota excedido (Too Many Requests).");
+            } else if (e.message.includes("API key not valid")) {
+                console.error("⚠️ La API KEY de Gemini es incorrecta o expiró.");
+            } else {
+                console.error("Detalle:", e.message);
+            }
         }
     });
 }
