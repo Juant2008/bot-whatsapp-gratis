@@ -10,7 +10,8 @@
     "whatsapp",
     "bot",
     "baileys",
-    "gemini"
+    "gemini",
+    "mysql"
   ],
   "author": "One4Cars",
   "license": "ISC",
@@ -19,6 +20,7 @@
     "@whiskeysockets/baileys": "^6.7.5",
     "pino": "^8.19.0",
     "qrcode": "^1.5.3",
-    "@google/generative-ai": "^0.11.1"
+    "@google/generative-ai": "^0.11.1",
+    "mysql2": "^3.9.2"
   }
 }
