@@ -1,18 +1,24 @@
 {
-  "name": "one4cars-bot-final-pro",
-  "version": "4.0.0",
+  "name": "bot-whatsapp-one4cars",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp con IA Gemini para One4Cars",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "gemini"
+  ],
+  "author": "One4Cars",
+  "license": "ISC",
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
-    "@whiskeysockets/baileys": "^6.6.0",
     "@hapi/boom": "^10.0.1",
-    "mysql2": "^3.9.0",
-    "node-cron": "^3.0.3",
-    "qrcode": "^1.5.3",
+    "@whiskeysockets/baileys": "^6.7.5",
     "pino": "^8.19.0",
-    "mongoose": "^7.0.0"
+    "qrcode": "^1.5.3",
+    "@google/generative-ai": "^0.11.1"
   }
 }
