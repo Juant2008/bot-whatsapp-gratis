@@ -9,7 +9,13 @@ const cobranza = require('./cobranza');
 
 // --- CONFIGURACIÓN DE IA ---
 const genAI = new GoogleGenerativeAI("AIzaSyCagnD3xFykhx8khwXcTQcLF1VtTCIfQhI");
-const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+const model = genAI.getGenerativeModel({ 
+    model: "gemini-1.5-flash",
+    generationConfig: {
+        maxOutputTokens: 500,
+        temperature: 0.7,
+    }
+});
 
 let qrCodeData = "";
 let socketBot = null;
@@ -65,22 +71,42 @@ async function startBot() {
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
+        
+        // No responder a notas de voz sin texto o mensajes propios
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+        const text = (msg.message.conversation || 
+                      msg.message.extendedTextMessage?.text || 
+                      msg.message.imageMessage?.caption || "").trim();
 
         if (text.length < 1) return;
 
+        console.log(`📩 Mensaje recibido de ${from}: ${text}`);
+
         try {
-            const prompt = `${knowledgeBase}\n\nPregunta del Cliente: ${text}\nRespuesta Asistente ONE4CARS:`;
+            // Generar contenido con un timeout para evitar que el bot se quede pegado
+            const prompt = `${knowledgeBase}\n\nCliente pregunta: "${text}"\nRespuesta de ONE4CARS:`;
+            
             const result = await model.generateContent(prompt);
             const response = await result.response;
             const replyText = response.text();
             
-            await sock.sendMessage(from, { text: replyText });
+            if (replyText) {
+                await sock.sendMessage(from, { text: replyText });
+                console.log(`✅ Respuesta enviada a ${from}`);
+            }
         } catch (e) {
-            console.error("Error procesando IA:", e.message);
+            console.error("❌ ERROR CRÍTICO GEMINI:");
+            console.error("Mensaje:", e.message);
+            
+            // Si hay un error de seguridad o bloqueo de Google, intentamos una respuesta simple
+            if (e.message.includes("SAFETY")) {
+                await sock.sendMessage(from, { text: "Lo siento, no puedo responder a eso por políticas de seguridad. ¿En qué más puedo ayudarte con tus autopartes? 🚗" });
+            } else {
+                // Notificar en consola si la API KEY falló de nuevo
+                console.log("Revisa si la API Key tiene permisos para 'Generative Language API' en Google Cloud.");
+            }
         }
     });
 }
