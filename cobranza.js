@@ -45,7 +45,7 @@ async function obtenerListaDeudores(filtros = {}) {
         
         let params = [minDias];
         if (vendedor) { sql += ` AND id_vendedor = (SELECT id_vendedor FROM tab_vendedores WHERE nombre = ? LIMIT 1)`; params.push(vendedor); }
-        if (zona) { sql += ` AND id_cliente IN (SELECT id_cliente FROM tab_cliente WHERE zona = ?)`; params.push(zona); }
+        if (zona) { sql += ` AND id_cliente IN (SELECT id_cliente FROM tab_clientes WHERE zona = ?)`; params.push(zona); }
         
         const [rows] = await conn.execute(sql, params);
         return rows;
