@@ -7,25 +7,29 @@ const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN IA ---
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// --- CONFIGURACIÓN DE IA ---
+const genAI = new GoogleGenerativeAI("AIzaSyCagnD3xFykhx8khwXcTQcLF1VtTCIfQhI");
 const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
 let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-const knowledgeBase = `Eres el asistente oficial de ONE4CARS. Empresa importadora de autopartes desde China a Venezuela.
-Proporciona respuestas útiles y usa siempre estos enlaces:
-1. Medios de pago: https://www.one4cars.com/medios_de_pago.php/
-2. Estado de cuenta: https://www.one4cars.com/estado_de_cuenta.php/
-3. Lista de precios: https://www.one4cars.com/lista_de_precios.php/
-4. Tomar pedido: https://www.one4cars.com/tomar_pedido.php/
-5. Mis clientes/Vendedores: https://www.one4cars.com/mis_clientes.php/
-6. Afiliar cliente: https://www.one4cars.com/afiliar_clientes.php/
-7. Consulta de productos: https://www.one4cars.com/consulta_productos.php/
-8. Seguimiento Despacho: https://www.one4cars.com/despacho.php/
-9. Asesor Humano: Indica que un operador revisará el caso pronto.`;
+// BASE DE CONOCIMIENTOS COMPLETA PARA LAS 9 OPCIONES
+const knowledgeBase = `Eres el asistente inteligente de ONE4CARS, empresa importadora de China a Venezuela.
+Tu objetivo es ayudar a clientes y vendedores. RESPONDE SIEMPRE incluyendo los links correspondientes:
+
+1. PAGOS: Informa sobre transferencias y divisas. Link: https://www.one4cars.com/medios_de_pago.php/
+2. ESTADO DE CUENTA: Para revisar facturas pendientes y saldos. Link: https://www.one4cars.com/estado_de_cuenta.php/
+3. LISTA DE PRECIOS: Catálogo actualizado de productos. Link: https://www.one4cars.com/lista_de_precios.php/
+4. TOMAR PEDIDO: Sistema para que el cliente cargue su compra. Link: https://www.one4cars.com/tomar_pedido.php/
+5. MIS CLIENTES: Exclusivo vendedores para gestionar su cartera. Link: https://www.one4cars.com/mis_clientes.php/
+6. AFILIAR CLIENTES: Registro de nuevos aliados comerciales. Link: https://www.one4cars.com/afiliar_clientes.php/
+7. FICHA TÉCNICA: Consulta de detalles y fotos de productos. Link: https://www.one4cars.com/consulta_productos.php/
+8. DESPACHO: Seguimiento de mercancía enviada. Link: https://www.one4cars.com/despacho.php/
+9. ASESOR HUMANO: Si el cliente requiere atención personalizada, indica que un asesor será notificado.
+
+Regla de oro: Sé profesional, usa emojis de autos (🚗, 📦) y siempre despídete invitando a cuidar su crédito.`;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -34,9 +38,9 @@ async function startBot() {
     const sock = makeWASocket({ 
         version, 
         auth: state, 
-        logger: pino({ level: 'silent' }), // Bajamos el ruido de logs
+        logger: pino({ level: 'silent' }), 
         browser: ["ONE4CARS", "Chrome", "1.0.0"],
-        markOnlineOnConnect: true
+        printQRInTerminal: true 
     });
 
     socketBot = sock;
@@ -45,63 +49,38 @@ async function startBot() {
     sock.ev.on('connection.update', (u) => {
         const { connection, lastDisconnect, qr } = u;
         if (qr) qrcode.toDataURL(qr, (err, url) => qrCodeData = url);
-        
         if (connection === 'open') {
             qrCodeData = "ONLINE ✅";
-            console.log("Conexión exitosa con WhatsApp");
+            console.log("ONE4CARS BOT CONECTADO");
         }
-        
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                console.log("Reconectando...");
+                console.log("Reconectando bot...");
                 setTimeout(startBot, 5000);
             }
         }
     });
 
-// --- CONFIGURACIÓN IA MEJORADA ---
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Usamos Flash que es más estable y rápido
-
-// ... (resto del código de conexión)
-
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
-        
-        // No responder a mensajes propios ni a grupos (opcional)
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
-        const text = (msg.message.conversation || 
-                      msg.message.extendedTextMessage?.text || 
-                      msg.message.imageMessage?.caption || "").trim();
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
 
-        // 1. Ignorar si el texto es muy corto o nulo
-        if (text.length < 2) return; 
+        if (text.length < 1) return;
 
         try {
-            // 2. Limpiar el prompt para evitar caracteres extraños
-            const prompt = `${knowledgeBase}\n\nPregunta del cliente: ${text}\nRespuesta profesional:`;
-            
+            const prompt = `${knowledgeBase}\n\nPregunta del Cliente: ${text}\nRespuesta Asistente ONE4CARS:`;
             const result = await model.generateContent(prompt);
             const response = await result.response;
-            const textReply = response.text();
-
-            if (textReply) {
-                await sock.sendMessage(from, { text: textReply });
-            }
+            const replyText = response.text();
+            
+            await sock.sendMessage(from, { text: replyText });
         } catch (e) {
-            // 3. Diagnóstico preciso del error
-            console.error("--- ERROR CRÍTICO IA ---");
-            if (e.message.includes("429")) {
-                console.error("⚠️ Límite de cuota excedido (Too Many Requests).");
-            } else if (e.message.includes("API key not valid")) {
-                console.error("⚠️ La API KEY de Gemini es incorrecta o expiró.");
-            } else {
-                console.error("Detalle:", e.message);
-            }
+            console.error("Error procesando IA:", e.message);
         }
     });
 }
@@ -109,17 +88,17 @@ const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Usamos
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
-    // HEADER PHP SIMULADO (SEGÚN INSTRUCCIONES)
-    const header = `
-        <header class="p-3 mb-4 border-bottom bg-dark text-white">
-            <div class="container d-flex justify-content-between align-items-center">
-                <h4 class="m-0">📦 ONE4CARS System</h4>
-                <nav>
-                    <a href="/" class="text-white me-3 text-decoration-none">Estado Bot</a>
-                    <a href="/cobranza" class="btn btn-primary btn-sm">Panel Cobranza</a>
-                </nav>
+    // RENDERIZADO DEL HEADER (include/header.php)
+    const renderHeader = () => `
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4 shadow">
+            <div class="container">
+                <a class="navbar-brand fw-bold" href="/">🚗 ONE4CARS SYSTEM</a>
+                <div class="d-flex">
+                    <a href="/cobranza" class="btn btn-outline-primary btn-sm me-2">Gestión Cobranza</a>
+                    <a href="/" class="btn btn-outline-light btn-sm">Estado QR</a>
+                </div>
             </div>
-        </header>`;
+        </nav>`;
 
     if (parsedUrl.pathname === '/cobranza') {
         try {
@@ -129,70 +108,162 @@ const server = http.createServer(async (req, res) => {
 
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
             res.write(`
-                <html>
+                <!DOCTYPE html>
+                <html lang="es">
                 <head>
+                    <meta charset="UTF-8">
                     <title>Cobranza - ONE4CARS</title>
                     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+                    <style>
+                        .table-container { max-height: 600px; overflow-y: auto; }
+                        .sticky-thead th { position: sticky; top: 0; background: #212529; z-index: 10; }
+                    </style>
                 </head>
                 <body class="bg-light">
-                    ${header}
-                    <div class="container bg-white shadow p-4 rounded">
-                        <form class="row g-2 mb-4">
-                            <div class="col-md-4"><select name="vendedor" class="form-select"><option value="">Vendedor</option>${v.map(i=>`<option value="${i.nombre}">${i.nombre}</option>`)}</select></div>
-                            <div class="col-md-4"><select name="zona" class="form-select"><option value="">Zona</option>${z.map(i=>`<option value="${i.zona}">${i.zona}</option>`)}</select></div>
-                            <div class="col-md-2"><input type="number" name="dias" class="form-control" placeholder="Días" value="${parsedUrl.query.dias || 0}"></div>
-                            <div class="col-md-2"><button class="btn btn-primary w-100">Filtrar</button></div>
+                    ${renderHeader()}
+                    <div class="container bg-white shadow p-4 rounded-3">
+                        <h4 class="mb-4 border-bottom pb-2">📦 Listado de Cuentas por Cobrar</h4>
+                        
+                        <form class="row g-3 mb-4 bg-light p-3 rounded border">
+                            <div class="col-md-3">
+                                <label class="small fw-bold">Vendedor:</label>
+                                <select name="vendedor" class="form-select form-select-sm">
+                                    <option value="">TODOS</option>
+                                    ${v.map(i => `<option value="${i.nombre}" ${parsedUrl.query.vendedor === i.nombre ? 'selected' : ''}>${i.nombre}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="small fw-bold">Zona:</label>
+                                <select name="zona" class="form-select form-select-sm">
+                                    <option value="">TODAS</option>
+                                    ${z.map(i => `<option value="${i.zona}" ${parsedUrl.query.zona === i.zona ? 'selected' : ''}>${i.zona}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="small fw-bold">Días Vencidos:</label>
+                                <input type="number" name="dias" class="form-select-sm form-control" value="${parsedUrl.query.dias || 0}">
+                            </div>
+                            <div class="col-md-2 d-flex align-items-end">
+                                <button type="submit" class="btn btn-primary btn-sm w-100 fw-bold">FILTRAR DATOS</button>
+                            </div>
                         </form>
-                        <div class="table-responsive" style="max-height:500px;">
-                            <table class="table table-sm table-hover">
-                                <thead class="table-dark">
-                                    <tr><th><input type="checkbox" id="all"></th><th>Cliente</th><th>Factura</th><th>Saldo $</th><th>Días</th></tr>
+
+                        <div class="table-container shadow-sm border rounded">
+                            <table class="table table-hover table-sm m-0">
+                                <thead class="table-dark sticky-thead text-center">
+                                    <tr>
+                                        <th><input type="checkbox" id="checkAll" class="form-check-input"></th>
+                                        <th>Cliente</th>
+                                        <th>Factura</th>
+                                        <th>Saldo $</th>
+                                        <th>Saldo Bs.</th>
+                                        <th>Días</th>
+                                    </tr>
                                 </thead>
                                 <tbody>
-                                    ${d.map(i=>`<tr><td><input type="checkbox" class="rowCheck" value='${JSON.stringify(i)}'></td><td><small>${i.nombres}</small></td><td><small>${i.nro_factura}</small></td><td class="text-danger"><b>$${parseFloat(i.saldo_pendiente).toFixed(2)}</b></td><td><span class="badge bg-warning text-dark">${i.dias_transcurridos}</span></td></tr>`).join('')}
+                                    ${d.map(i => `
+                                        <tr class="text-center align-middle">
+                                            <td><input type="checkbox" class="rowCheck form-check-input" value='${JSON.stringify(i)}'></td>
+                                            <td class="text-start"><small>${i.nombres}</small></td>
+                                            <td><span class="badge bg-secondary">${i.nro_factura}</span></td>
+                                            <td class="text-danger fw-bold">$${parseFloat(i.saldo_pendiente).toFixed(2)}</td>
+                                            <td class="text-primary fw-bold">Bs. ${parseFloat(i.saldo_bolivares).toFixed(2)}</td>
+                                            <td><span class="badge ${i.dias_transcurridos > 30 ? 'bg-danger' : 'bg-warning text-dark'}">${i.dias_transcurridos}</span></td>
+                                        </tr>
+                                    `).join('')}
                                 </tbody>
                             </table>
                         </div>
-                        <button onclick="enviar()" id="btn" class="btn btn-success w-100 py-3 mt-3 fw-bold">🚀 ENVIAR WHATSAPP SELECCIONADOS</button>
+
+                        <div class="mt-4 p-3 bg-dark rounded shadow">
+                            <button onclick="enviarMensajes()" id="btnSend" class="btn btn-success w-100 py-3 fw-bold shadow">
+                                🚀 ENVIAR RECORDATORIOS VÍA WHATSAPP (${d.length} registros cargados)
+                            </button>
+                        </div>
                     </div>
+
                     <script>
-                        document.getElementById('all').onclick = function() { document.querySelectorAll('.rowCheck').forEach(c => c.checked = this.checked); }
-                        async function enviar() {
-                            const sel = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
-                            if(sel.length === 0) return alert('Seleccione clientes');
-                            const btn = document.getElementById('btn');
-                            btn.disabled = true; btn.innerText = 'PROCESANDO ENVÍO...';
-                            await fetch('/enviar-cobranza', { method:'POST', body: JSON.stringify({facturas:sel}) });
-                            alert('Envío de mensajes iniciado.');
-                            btn.disabled = false; btn.innerText = '🚀 ENVIAR WHATSAPP SELECCIONADOS';
+                        document.getElementById('checkAll').onclick = function() {
+                            document.querySelectorAll('.rowCheck').forEach(c => c.checked = this.checked);
+                        };
+
+                        async function enviarMensajes() {
+                            const seleccionados = Array.from(document.querySelectorAll('.rowCheck:checked'))
+                                                       .map(cb => JSON.parse(cb.value));
+                            
+                            if (seleccionados.length === 0) return alert('Debes seleccionar al menos un cliente de la lista.');
+                            
+                            const btn = document.getElementById('btnSend');
+                            btn.disabled = true;
+                            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> PROCESANDO ENVÍO...';
+
+                            try {
+                                await fetch('/enviar-cobranza', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ facturas: seleccionados })
+                                });
+                                alert('El proceso de envío masivo ha iniciado correctamente.');
+                            } catch (e) {
+                                alert('Error al procesar el envío.');
+                            } finally {
+                                btn.disabled = false;
+                                btn.innerText = '🚀 ENVIAR RECORDATORIOS VÍA WHATSAPP';
+                            }
                         }
                     </script>
                 </body>
-                </html>`);
+                </html>
+            `);
             res.end();
         } catch (e) {
-            res.end(`Error: ${e.message}`);
+            res.writeHead(500, { 'Content-Type': 'text/html' });
+            res.end(`<div class="container mt-5 alert alert-danger">Error Base de Datos: ${e.message}</div>`);
         }
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
-        let b = ''; req.on('data', c => b += c);
+        let body = '';
+        req.on('data', chunk => body += chunk);
         req.on('end', () => {
-            const data = JSON.parse(b);
+            const data = JSON.parse(body);
             cobranza.ejecutarEnvioMasivo(socketBot, data.facturas);
             res.end("OK");
         });
     } else {
+        // PÁGINA PRINCIPAL - ESTADO QR
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`
-            <html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
-            <body class="bg-light">
-                ${header}
-                <center style="margin-top:50px;">
-                    <h1>Estatus del Bot</h1>
-                    <div class="mt-4">${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" class="border p-2 bg-white shadow">` : `<h3 class="text-success">${qrCodeData || "Iniciando..."}</h3>`}</div>
-                </center>
-            </body></html>`);
+            <html>
+            <head>
+                <title>Status Bot - ONE4CARS</title>
+                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+            </head>
+            <body class="bg-light text-center">
+                ${renderHeader()}
+                <div class="container py-5">
+                    <div class="card shadow p-4 mx-auto" style="max-width: 500px;">
+                        <h2 class="mb-4">Estatus de Conexión</h2>
+                        <div class="mb-4">
+                            ${qrCodeData.startsWith('data') 
+                                ? `<img src="${qrCodeData}" class="border p-3 bg-white shadow-sm rounded" style="width: 300px;">
+                                   <p class="mt-3 text-muted">Escanea el código con tu WhatsApp</p>` 
+                                : `<div class="alert alert-success fw-bold">${qrCodeData || "Iniciando sistema..."}</div>`
+                            }
+                        </div>
+                        <a href="/cobranza" class="btn btn-primary py-2 fw-bold">IR AL PANEL DE COBRANZA</a>
+                    </div>
+                </div>
+            </body>
+            </html>`);
     }
 });
 
-server.on('error', (e) => { if (e.code === 'EADDRINUSE') setTimeout(() => { server.close(); server.listen(port); }, 3000); });
-server.listen(port, () => { startBot(); });
+server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+        setTimeout(() => { server.close(); server.listen(port); }, 3000);
+    }
+});
+
+server.listen(port, '0.0.0.0', () => {
+    console.log("Servidor ONE4CARS corriendo en puerto " + port);
+    startBot();
+});
