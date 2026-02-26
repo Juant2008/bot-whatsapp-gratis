@@ -4,98 +4,45 @@ const qrcode = require('qrcode');
 const http = require('http');
 const url = require('url');
 const pino = require('pino');
-const axios = require('axios'); // Para obtener el dólar
+const axios = require('axios');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN DE IA (ONE4CARS 2026) ---
+// --- CONFIGURACIÓN DE IA (Actualizado ONE4CARS 2026) ---
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({ 
     model: "gemini-2.5-flash", 
-    generationConfig: { temperature: 0.8, maxOutputTokens: 1000 }
+    generationConfig: { temperature: 0.7, maxOutputTokens: 800 }
 });
 
 let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-// FUNCIÓN PARA OBTENER PRECIO DEL DÓLAR
+// FUNCIÓN PARA OBTENER TASAS (BCV Y PARALELO)
 async function getDolar() {
     try {
-        // Nota: Se asume una API o servicio de monitoreo compatible. 
-        // Si no tienes una API paga, este es un ejemplo de estructura de retorno.
         const response = await axios.get('https://pydolarve.org/api/v1/dollar?page=bcv'); 
-        const bcv = response.data.monitors.bcv.price || "Cargando...";
-        const paralelo = response.data.monitors.enparalelovzla.price || "Cargando...";
-        return `📈 *Tasa del Día:* BCV: Bs. ${bcv} | Paralelo: Bs. ${paralelo}`;
+        const bcv = response.data.monitors.bcv.price || "No disponible";
+        const paralelo = response.data.monitors.enparalelovzla.price || "No disponible";
+        return `Tasa BCV: Bs. ${bcv} | Paralelo: Bs. ${paralelo}`;
     } catch (e) {
-        return "📈 *Tasa del Día:* Consultar en administración (Error de conexión).";
+        return "Tasa: Consultar con administración.";
     }
 }
 
-// BASE DE CONOCIMIENTOS CON PERSONALIDAD INDAGATORIA
-const knowledgeBase = (tasa) => `Eres el Asistente Inteligente de ONE4CARS (2026). 
-Empresa líder en importación de autopartes exclusivos de la marca ONE4CARS para Venezuela. 
-Contamos con un Almacénes en la ciudad de CARACAS.
+// BASE DE CONOCIMIENTOS ONE4CARS (NUNCA OMITIR OPCIONES)
+const knowledgeBase = (tasa) => `Eres el asistente inteligente de ONE4CARS. Empresa importadora de autopartes (China -> Venezuela).
+Tasa del día: ${tasa}.
 
-TONO Y PERSONALIDAD:
-- Eres extremadamente amable, servicial, eficiente y profesional.
-- NO respondas siempre con la lista de opciones. 
-- Primero indaga: "¿En qué puedo apoyarte hoy con respecto a tus repuestos?" o "¿Buscas consultar algún precio o el estado de un despacho?".
-- Usa emojis de forma natural (🚗, 📦, 🛠️, 🇻🇪).
-- IMPORTANTE: Siempre menciona la tasa del día al inicio o final si el cliente pregunta por costos o pagos.
-- Si el cliente es vago, ofrece 2 o 3 opciones lógicas en lugar de las 9.
--Nuestros productos estrella son: Bombas de Gasolina
-Bujias de Encendido
-Correas
-Crucetas
-Filtros de Aceite
-Filtros de Gasolina
-Lapiz Estabilizador
-Muñones
-Poleas
-Puentes de Cardan
-Puntas de Tripoide
-Rodamientos
-Tapas de Radiador
-Terminales de Direccion.
--  "¿Venden al detal o solo al mayor?" vendemos al mayor / "¿Cuál es el monto mínimo de compra para abrir código?" 100$
-•	Requisitos: "¿Qué documentos necesito para registrarme como cliente (COPIA DE RIF, COPIA DE CEDULA DE IDENTIDAD, 2 REFERENCIAS COMERCIALES, FOTO DE LOCAL Y NOMBRE Y CELULAR DEL REPRESENTANTE LEGAL )?"
-•	Ubicación: "¿Dónde están ubicados sus almacenes? caracas ¿Puedo retirar personalmente?" Los pediso son despachados por nuestro personal
-•	Catálogo: "¿Me pueden enviar su lista de precios actualizada?" si esta registrado si, debe suministrar el numero de rif.
-•	Procedencia: "¿Sus repuestos son originales, certificados o genéricos chinos?" Certificados fabricados en china con los mejores materiales
-•	Marcas: "¿Qué marcas representan o importan ustedes?" Nuestra propia marca ONE4CARS
--	Precios: La moneda base es el Dólar (USD). Los pagos en Bolívares se calculan a la tasa BCV del día. Ofrecemos descuentos por pago en divisas.
-•	Vendedores: Contamos con 10 vendedores en el país.
-1.	Sé siempre amable, profesional y usa un tono venezolano (cordial pero eficiente).
-2.	Si preguntan por un producto específico que no menciono aquí, dile que vas a consultar con el manager y pronto sera informado.
-3.	Si un cliente quiere comprar, pídele su  rif de cliente para buscarlo en la tab_clientes. el rif siempre comienza con una letra que puede ser J V o E luego viene un valor numerico y tiene este formato J3092091089 O J-309209108 PUEDE O NO TENER GUION EN LA BASE DE DATOS EN EL CAMPO RIF
-4.	Nunca inventes precios. Si no sabes el precio de algo, ofrece comunicarlo con un vendedor humano.
--   Stock: "¿Tienen disponibilidad de [X producto] en el almacén intermedio ahora mismo?"LUEGO DE SER VALIDADO EL RIF SE LE PUEDE INFORMAR DE EL PRECIO, EL PRECIO DEL CLIENTE ESTA EN EL CAMPO precio_minimo
-•	Estado de Cuenta: "¿Cuánto debo de mi última factura?"LUEGO DE SER VALIDADO EL RIF SE LE PUEDE INFORMAR DEL MONTO QUE ESTA EN EL CAMPO total de la factura de el rif del cliente que diga en el campo pagada igual a NO / "¿Cuándo vence mi crédito?" LUEGO DE SER VALIDADO EL RIF SE LE PUEDE INFORMAR LOS DIAS TRANSCURRIDOS DESDE SU EMISION Y LOS QUE FALTAN PARA LLEGAR A 30 DIAS .
-•	Descuentos: "Si pago hoy mismo en divisas en efectivo, ¿qué descuento me aplican?" el factor de descuento de la factura esta en el campo porcentaje de la tab_facturas si dice 0.6 el descuento es 40% si es 0.7 el descuento 30%, etc. 
-•	Pagos: "¿A qué tasa BCV están recibiendo hoy?" / la tasa se le suministra a traves de esta API 
- "¿Tienen Zelle o cuenta nacional?" lUEGO DE VALIDADO EL CLIENTE O VENDEDOR SE LE DEBE ENVIAR EL link de medios de pago
-•	Reclamos: "Me llegó una caja de [X producto] incompleta o dañada, ¿cómo procedemos?" Debe indicarnos el rif y el numero de Nota y debemos ser notificados 
-•	Novedades: "¿Qué mercancía nueva llegó en el último contenedor de China?" luego de validado el cliente se le puede enviar el link de https://one4cars.com/sevencorpweb/productos_transito_web.php
-3. Perfil: Vendedores (Tus 10 trabajadores)
-Preguntas que el bot les contesta para que ellos no pierdan tiempo llamando a la oficina.
-•	Comisiones: "¿Ya salió el reporte de mis comisiones pagadas?" luego de validado el venddor debe enviarsele el link https://one4cars.com/sevencorpweb/estado_de_cuenta.php
-•	Clientes: "¿El cliente [Nombre] ya pagó la factura #5679?" luego de validado el vendedor y que el cliente este asignado a el vendedor se le da la informacion
-•	Cotizaciones: "¿Me puedes cotizar 50 unidades de [Producto] para un cliente especial?" 
-4. Perfil: Curiosos (Público general / Detal)
--Garantías: "¿Qué garantía tienen las partes eléctricas (bombas, sensores)?" / "¿Cuánto tiempo tengo para devolver un producto?" debe tyramitarlo con su vendedor, nuestros productos gozan de garantia
-•	Fletes: "¿El envío corre por cuenta de ONE4CARS o lo paga la tienda?" / "¿Por qué empresa de transporte envían (Zoom, Tealca, Flete privado)?" el envio en la zona de caracas corre por la empresa, fuera de caracas el envio lo debe pagar el cliente
-•	Empaque: "¿La mercancía viene en caja de la marca o caja blanca?" Todos nuestros productos vienen tanto en el cuerpo del producto como en su empaque identificado con nuestra marca ONE4CARS
-•	Capacidad: "¿Tienen capacidad para surtir una cadena de tiendas a nivel nacional o solo tiendas pequeñas?" Tenemos capacidad y stock para atender cadenas de tiendas en todo el pais
-El bot debe saber decir "no" sin ser grosero.
-•	Compra unitaria: "¿Venden solo una bomba de gasolina para mi carro personal?" con mucha amabilidad debe decirle que solo vendemos al mayor
-•	Instalación: "¿Ustedes también instalan los repuestos o tienen taller?" con mucha amabilidad debe decirle que solo vendemos al mayor, no hacemos instalaciones
-•	Referencia: "No soy tienda, pero quiero comprarles, ¿dónde puedo conseguir sus productos al detal?" con mucha amabilidad se le puede dar este link https://one4cars.com/buscar/ sin validar quien lo pregunte
-${tasa}
+TU OBJETIVO: Indagar la necesidad del cliente y enviar el link específico.
+- Si el cliente pregunta por costos, precios o catálogo: Envía https://www.one4cars.com/lista_de_precios.php/
+- Si pregunta por deudas o facturas: Envía https://www.one4cars.com/estado_de_cuenta.php/
+- Si pregunta por cómo pagar: Envía https://www.one4cars.com/medios_de_pago.php/
+- Si es un cliente nuevo o curioso: Pregúntale amablemente si desea conocer nuestro menú de opciones completo.
 
-ENLACES OFICIALES PARA TU REFERENCIA:
+MENÚ COMPLETO (Solo si lo piden o es necesario):
 1. Medios de pago: https://www.one4cars.com/medios_de_pago.php/
 2. Estado de cuenta: https://www.one4cars.com/estado_de_cuenta.php/
 3. Lista de precios: https://www.one4cars.com/lista_de_precios.php/
@@ -104,9 +51,9 @@ ENLACES OFICIALES PARA TU REFERENCIA:
 6. Afiliar cliente: https://www.one4cars.com/afiliar_clientes.php/
 7. Consulta de productos: https://www.one4cars.com/consulta_productos.php/
 8. Seguimiento Despacho: https://www.one4cars.com/despacho.php/
-9. Asesor Humano: Indica que un operador revisará el caso.
+9. Asesor Humano: Indica que un operador atenderá pronto.
 
-INSTRUCCIÓN ESPECIAL: Si el cliente agradece o se despide, cierra cordialmente invitándolo a volver.`;
+REGLA DE ORO: No seas repetitivo. Escucha al cliente y responde con el link exacto que soluciona su duda.`;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -116,7 +63,7 @@ async function startBot() {
         version, 
         auth: state, 
         logger: pino({ level: 'silent' }), 
-        browser: ["ONE4CARS BOT", "Chrome", "1.0.0"]
+        browser: ["ONE4CARS", "Chrome", "1.0.0"]
     });
 
     socketBot = sock;
@@ -127,7 +74,7 @@ async function startBot() {
         if (qr) qrcode.toDataURL(qr, (err, url) => qrCodeData = url);
         if (connection === 'open') {
             qrCodeData = "ONLINE ✅";
-            console.log("Conectado a WhatsApp.");
+            console.log("Conectado exitosamente.");
         }
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -144,27 +91,25 @@ async function startBot() {
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         const textLow = text.toLowerCase();
 
-        if (text.length < 1) return;
-
         try {
-            const tasaActual = await getDolar();
-            const promptContext = knowledgeBase(tasaActual);
+            const tasaHoy = await getDolar();
             
-            const result = await model.generateContent(`${promptContext}\n\nCliente: ${text}\nAsistente (indagando amablemente):`);
-            const response = await result.response;
-            let respuestaIA = response.text();
+            // Si pide lista o precios directamente
+            if (textLow.includes("lista") || textLow.includes("precio") || textLow.includes("catalogo")) {
+                return await sock.sendMessage(from, { text: `🚗 *ONE4CARS* 📦\n\nClaro, aquí puedes ver nuestra lista de precios actualizada:\nhttps://www.one4cars.com/lista_de_precios.php/\n\n${tasaHoy}\n\n¿Deseas ayuda con algo más?` });
+            }
 
-            await sock.sendMessage(from, { text: respuestaIA });
+            // Consulta a Gemini con el contexto de indagación
+            const result = await model.generateContent(`${knowledgeBase(tasaHoy)}\n\nCliente: ${text}\nAsistente (Amable e indagador):`);
+            const response = await result.response;
+            await sock.sendMessage(from, { text: response.text() });
 
         } catch (e) {
-            console.error("Error en Gemini:", e);
-            let saludo = "🚗 *¡Hola! Bienvenido a ONE4CARS* 📦\n\n";
-            let fallbackMsg = "Disculpe, estoy experimentando un breve inconveniente técnico. ¿Desea que le ayude con sus pagos, lista de precios o el estado de su pedido?";
-            
-            if (textLow.includes("pago")) fallbackMsg = "Para sus pagos: https://www.one4cars.com/medios_de_pago.php/";
-            else if (textLow.includes("precio")) fallbackMsg = "Lista de precios: https://www.one4cars.com/lista_de_precios.php/";
-            
-            await sock.sendMessage(from, { text: saludo + fallbackMsg });
+            console.error("Error:", e);
+            // Fallback manual completo
+            let saludo = "🚗 *ONE4CARS* 📦\n\n";
+            let menu = `No pude procesar tu solicitud exacta, pero aquí tienes mis opciones:\n1. Pagos: https://www.one4cars.com/medios_de_pago.php/\n2. Precios: https://www.one4cars.com/lista_de_precios.php/`;
+            await sock.sendMessage(from, { text: saludo + menu });
         }
     });
 }
@@ -172,12 +117,13 @@ async function startBot() {
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
+    // HEADER PHP OBLIGATORIO (No se simplifica)
     const header = `
         <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center">
                     <h4 class="m-0 text-primary fw-bold">🚗 ONE4CARS</h4>
-                    <span class="ms-3 badge bg-secondary d-none d-md-inline">Panel Administrativo 2026</span>
+                    <span class="ms-3 badge bg-secondary d-none d-md-inline">Panel Administrativo</span>
                 </div>
                 <nav>
                     <a href="/" class="text-white me-3 text-decoration-none small">Estado Bot</a>
@@ -209,7 +155,7 @@ const server = http.createServer(async (req, res) => {
                         <div class="d-flex justify-content-between align-items-center mb-4">
                             <h3>Gestión de Cobranza</h3>
                             <div class="text-end">
-                                <span class="badge bg-danger">Facturas Pendientes: ${d.length}</span>
+                                <span class="badge bg-danger">Facturas: ${d.length}</span>
                             </div>
                         </div>
 
@@ -276,7 +222,7 @@ const server = http.createServer(async (req, res) => {
                             const b = document.getElementById('btnSend');
                             b.disabled = true; b.innerText = 'ENVIANDO...';
                             await fetch('/enviar-cobranza', { method:'POST', body: JSON.stringify({facturas:selected}) });
-                            alert('Envío de recordatorios iniciado correctamente');
+                            alert('Envío iniciado correctamente');
                             b.disabled = false; b.innerText = '🚀 ENVIAR RECORDATORIOS MASIVOS';
                         }
                     </script>
@@ -284,7 +230,7 @@ const server = http.createServer(async (req, res) => {
                 </html>
             `);
             res.end();
-        } catch (e) { res.end(`Error SQL en Cobranza: ${e.message}`); }
+        } catch (e) { res.end(`Error SQL: ${e.message}`); }
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', () => { 
@@ -302,14 +248,14 @@ const server = http.createServer(async (req, res) => {
                 ${header}
                 <div class="container py-5">
                     <div class="card shadow p-4 mx-auto" style="max-width: 450px;">
-                        <h4 class="mb-4">Estatus Conexión WhatsApp</h4>
+                        <h4 class="mb-4">Status de Conexión</h4>
                         <div class="mb-4">
                             ${qrCodeData.startsWith('data') 
                                 ? `<img src="${qrCodeData}" class="border shadow rounded p-2 bg-white" style="width: 250px;">` 
                                 : `<div class="alert alert-success fw-bold p-4 h2">${qrCodeData || "Iniciando..."}</div>`
                             }
                         </div>
-                        <p class="text-muted small">Escanee para activar la IA de ONE4CARS</p>
+                        <p class="text-muted small">Escanee el código para activar el servicio de ONE4CARS</p>
                         <hr>
                         <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2">IR AL PANEL DE COBRANZA</a>
                     </div>
