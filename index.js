@@ -13,14 +13,14 @@ const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({ 
     model: "gemini-2.5-flash", 
-    generationConfig: { temperature: 0.8, maxOutputTokens: 1000 } // Subimos temperatura para más fluidez humana
+    generationConfig: { temperature: 0.9, maxOutputTokens: 1000 } 
 });
 
 let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-// --- LÓGICA DE DÓLAR CON APIS ESPECÍFICAS Y CACHÉ ---
+// --- LÓGICA DE DÓLAR CORREGIDA (API BCV + PARALELO) ---
 let _SESSION = {};
 
 async function obtener_dolar_con_cache(type) {
@@ -36,23 +36,26 @@ async function obtener_dolar_con_cache(type) {
         ? "https://api.dolarvzla.com/public/exchange-rate" 
         : "https://ve.dolarapi.com/v1/dolares/paralelo";
 
-    const get_fallback = () => {
-        return (_SESSION[cache_key] && !isNaN(_SESSION[cache_key])) ? parseFloat(_SESSION[cache_key]) : 0.0;
-    };
-
     try {
         const res = await axios.get(targetUrl, { timeout: 7000 });
         const data = res.data;
-        // Lógica según la estructura de las nuevas APIs
-        let valor = (type === 'oficial') ? (data.current?.usd ?? 0.0) : (data.promedio ?? 0.0);
+        let valor = 0;
 
-        if (valor <= 0) return get_fallback();
+        if (type === 'oficial') {
+            // CORRECCIÓN: La API dolarvzla devuelve { "usd": { "price": XX, ... } } o similar
+            // Según tu link, la estructura correcta para el precio es:
+            valor = data.current?.usd ?? data.usd?.price ?? 0;
+        } else {
+            valor = data.promedio ?? 0;
+        }
+
+        if (valor <= 0) return _SESSION[cache_key] || 0;
 
         _SESSION[cache_key] = parseFloat(valor);
         _SESSION[cache_time_key] = Math.floor(Date.now() / 1000);
         return parseFloat(valor);
     } catch (e) {
-        return get_fallback();
+        return _SESSION[cache_key] || 0;
     }
 }
 
@@ -68,24 +71,21 @@ const MENU_COMPLETO = `🛠️ *MENÚ DE OPCIONES ONE4CARS* 🚗
 8. 🚚 *Seguimiento Despacho:* https://www.one4cars.com/despacho.php/
 9. 👨‍💼 *Asesor Humano:* Un operador revisará su requerimiento pronto.`;
 
-// --- PROMPT CON LENGUAJE HUMANO VENEZOLANO ---
-const knowledgeBase = (oficial, paralelo) => `Eres el Asistente de ONE4CARS. No eres un robot, eres un asesor de ventas venezolano, cordial, atento y "pilas".
+// --- PROMPT DE IA: MENOS ROBOT, MÁS VENDEDOR VENEZOLANO ---
+const knowledgeBase = (oficial, paralelo) => `Eres el Asesor Virtual de ONE4CARS. 
+¡No respondas como un robot! Habla como un vendedor de repuestos en Venezuela: cordial, atento y con chispa.
 
-CONTEXTO:
-Importamos repuestos de China (tren delantero, rodamientos, etc.). 
+SITUACIÓN ACTUAL:
 Tasa BCV: Bs. ${oficial} | Paralelo: Bs. ${paralelo}.
 
-REGLAS DE PERSONALIDAD:
-- Saluda con naturalidad: "¡Hola! Un gusto saludarte", "¡Buen día! ¿Cómo va todo?", "A la orden por aquí".
-- Habla como en Venezuela pero profesional: Usa "A su orden", "Dígame", "Con gusto".
-- INDAGA: No solo respondas. Si alguien saluda, dile: "¿Qué repuesto estás buscando hoy para tu carro?" o "¿En qué te puedo apoyar con tu pedido?".
-- SOSPECHA: Si preguntan por rodamientos o precios, dales el link de la lista pero pregúntales para qué carro buscan. 
-- SIEMPRE ofrece ayuda antes de mandar el menú. Solo manda el menú completo si te lo piden o si el cliente está muy perdido.
-- Si el usuario dice que es VENDEDOR, dile: "¡Excelente colega! Aquí tienes las herramientas para gestionar tus clientes y pedidos" (Opciones 4 y 5).
+REGLAS DE ORO:
+1. SI preguntan por Juan: Dile que Juan está en la oficina ocupado con unos pedidos de China, pero que tú puedes adelantarle cualquier información de precios, pagos o despachos mientras él se desocupa. ¡No lo dejes morir!
+2. INDAGA SIEMPRE: Si te saludan, pregunta: "¿Qué repuesto estás buscando hoy?" o "¿Para qué carro necesitas piezas?".
+3. SI ES VENDEDOR: Dale confianza, dile "¡Epa colega! ¿Cómo va esa venta? Aquí tienes las herramientas de siempre (Opciones 4 y 5)".
+4. NO MANDES EL MENÚ DE UNA: Primero conversa. Solo manda el menú si el cliente te lo pide (escribe MENU) o si ves que no sabe qué hacer.
+5. SOSPECHA: Si pregunta precios, mándale el link de la lista pero pregúntale: "¿Quieres que te ayude a buscar algo específico en el catálogo?".
 
-LINKS:
-- Lista Precios: https://www.one4cars.com/lista_de_precios.php/
-- Estado Cuenta: https://www.one4cars.com/estado_de_cuenta.php/`;
+IMPORTANTE: Tus respuestas deben ser variadas. ¡Nada de repetir lo mismo mil veces!`;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -121,26 +121,27 @@ async function startBot() {
         const textLow = text.toLowerCase();
 
         try {
-            const dolarOficial = await obtener_dolar_con_cache('oficial');
-            const dolarParalelo = await obtener_dolar_con_cache('paralelo');
+            const oficial = await obtener_dolar_con_cache('oficial');
+            const paralelo = await obtener_dolar_con_cache('paralelo');
 
-            // Intercepción manual para comandos críticos
+            // 1. Comandos de respuesta inmediata (Manuales)
             if (textLow === "menu" || textLow === "menú" || textLow === "opciones") {
-                return await sock.sendMessage(from, { text: `¡Claro que sí! Aquí tienes nuestro catálogo de opciones:\n\n${MENU_COMPLETO}` });
+                return await sock.sendMessage(from, { text: `¡Seguro! Aquí tienes todas nuestras herramientas a la mano:\n\n${MENU_COMPLETO}` });
             }
 
             if (textLow.includes("tasa") || textLow.includes("bcv") || textLow.includes("dolar")) {
-                return await sock.sendMessage(from, { text: `📈 *TASAS ACTUALIZADAS*\n\nOficial (BCV): Bs. ${dolarOficial}\nParalelo: Bs. ${dolarParalelo}\n\n¿Vas a realizar un pago o necesitas cotizar algún producto?` });
+                return await sock.sendMessage(from, { text: `📊 *TASAS DE HOY*\n\nOficial (BCV): Bs. ${oficial}\nParalelo: Bs. ${paralelo}\n\n¿Quieres que te ayude a sacar la cuenta de algún pedido?` });
             }
 
-            // Generación de respuesta con IA humana
-            const result = await model.generateContent(`${knowledgeBase(dolarOficial, dolarParalelo)}\n\nCliente: ${text}\nAsistente (Cordial e indagador):`);
+            // 2. Respuesta Humana con IA
+            const prompt = `${knowledgeBase(oficial, paralelo)}\n\nCliente: ${text}\nAsesor (habla natural):`;
+            const result = await model.generateContent(prompt);
             const response = await result.response;
             await sock.sendMessage(from, { text: response.text() });
 
         } catch (e) {
-            console.error("Error:", e);
-            await sock.sendMessage(from, { text: "¡Hola! Un gusto saludarte. ¿En qué te puedo apoyar hoy con tus repuestos? Escribe *MENU* para ver todas las opciones." });
+            console.error("Error en flujo:", e);
+            await sock.sendMessage(from, { text: "¡Hola! Un gusto saludarte. ¿En qué puedo apoyarte hoy con tus repuestos? Si quieres ver las opciones escribe *MENU*." });
         }
     });
 }
@@ -154,7 +155,7 @@ const server = http.createServer(async (req, res) => {
             <div class="container d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center">
                     <h4 class="m-0 text-primary fw-bold">🚗 ONE4CARS</h4>
-                    <span class="ms-3 badge bg-secondary d-none d-md-inline">Gestión 2026</span>
+                    <span class="ms-3 badge bg-secondary d-none d-md-inline">Administración v2026</span>
                 </div>
                 <nav>
                     <a href="/" class="text-white me-3 text-decoration-none small">Estado Bot</a>
@@ -183,36 +184,33 @@ const server = http.createServer(async (req, res) => {
                 <body class="bg-light">
                     ${header}
                     <div class="container-fluid px-4">
-                        <div class="card shadow mb-4 border-0">
+                        <div class="card shadow-sm mb-4 border-0 rounded-3">
                             <div class="card-body">
-                                <h4 class="fw-bold mb-3">Panel de Cobranza</h4>
-                                <form class="row g-3">
+                                <h4 class="mb-3 fw-bold">Filtros de Cobranza</h4>
+                                <form class="row g-2">
                                     <div class="col-md-3">
-                                        <label class="small fw-bold">Vendedor</label>
                                         <select name="vendedor" class="form-select">
-                                            <option value="">-- Todos --</option>
+                                            <option value="">-- Vendedor --</option>
                                             ${v.map(i => `<option value="${i.nombre}" ${parsedUrl.query.vendedor === i.nombre ? 'selected' : ''}>${i.nombre}</option>`).join('')}
                                         </select>
                                     </div>
                                     <div class="col-md-3">
-                                        <label class="small fw-bold">Zona</label>
                                         <select name="zona" class="form-select">
-                                            <option value="">-- Todas --</option>
+                                            <option value="">-- Zona --</option>
                                             ${z.map(i => `<option value="${i.zona}" ${parsedUrl.query.zona === i.zona ? 'selected' : ''}>${i.zona}</option>`).join('')}
                                         </select>
                                     </div>
                                     <div class="col-md-2">
-                                        <label class="small fw-bold">Días</label>
-                                        <input type="number" name="dias" class="form-control" value="${parsedUrl.query.dias || 0}">
+                                        <input type="number" name="dias" class="form-control" placeholder="Días" value="${parsedUrl.query.dias || 0}">
                                     </div>
-                                    <div class="col-md-4 d-flex align-items-end">
-                                        <button class="btn btn-primary w-100 fw-bold">FILTRAR REGISTROS</button>
+                                    <div class="col-md-4">
+                                        <button class="btn btn-primary w-100 fw-bold">APLICAR FILTROS</button>
                                     </div>
                                 </form>
                             </div>
                         </div>
 
-                        <div class="card shadow border-0">
+                        <div class="card shadow border-0 rounded-3">
                             <div class="table-container">
                                 <table class="table table-hover align-middle mb-0">
                                     <thead class="table-dark">
@@ -220,9 +218,9 @@ const server = http.createServer(async (req, res) => {
                                             <th><input type="checkbox" id="selectAll" class="form-check-input"></th>
                                             <th class="text-start">Cliente</th>
                                             <th>Factura</th>
-                                            <th>Monto $</th>
-                                            <th>Monto Bs.</th>
-                                            <th>Días</th>
+                                            <th>Saldo $</th>
+                                            <th>Saldo Bs.</th>
+                                            <th>Vence</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -232,15 +230,15 @@ const server = http.createServer(async (req, res) => {
                                                 <td class="text-start"><strong>${i.nombres}</strong></td>
                                                 <td><span class="badge bg-light text-dark border">${i.nro_factura}</span></td>
                                                 <td class="text-danger fw-bold">$${parseFloat(i.saldo_pendiente).toFixed(2)}</td>
-                                                <td class="text-primary fw-bold">Bs. ${parseFloat(i.saldo_bolivares).toFixed(2)}</td>
-                                                <td><span class="badge ${i.dias_transcurridos > 15 ? 'bg-danger' : 'bg-success'}">${i.dias_transcurridos}</span></td>
+                                                <td class="text-primary">Bs. ${parseFloat(i.saldo_bolivares).toFixed(2)}</td>
+                                                <td><span class="badge ${i.dias_transcurridos > 15 ? 'bg-danger' : 'bg-success'}">${i.dias_transcurridos} días</span></td>
                                             </tr>
                                         `).join('')}
                                     </tbody>
                                 </table>
                             </div>
                             <div class="card-footer bg-white p-3">
-                                <button onclick="enviar()" id="btnSend" class="btn btn-success btn-lg w-100 fw-bold shadow">🚀 ENVIAR RECORDATORIOS POR WHATSAPP</button>
+                                <button onclick="enviar()" id="btnSend" class="btn btn-success btn-lg w-100 fw-bold shadow">🚀 ENVIAR RECORDATORIOS MASIVOS</button>
                             </div>
                         </div>
                     </div>
@@ -250,23 +248,23 @@ const server = http.createServer(async (req, res) => {
                         };
                         async function enviar() {
                             const selected = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
-                            if(selected.length === 0) return alert('Seleccione clientes');
+                            if(selected.length === 0) return alert('Por favor seleccione al menos una factura.');
                             const btn = document.getElementById('btnSend');
-                            btn.disabled = true; btn.innerText = 'ENVIANDO...';
+                            btn.disabled = true; btn.innerText = 'ENVIANDO MENSAJES...';
                             await fetch('/enviar-cobranza', { 
                                 method:'POST', 
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({facturas:selected}) 
                             });
-                            alert('Envío masivo iniciado correctamente.');
-                            btn.disabled = false; btn.innerText = '🚀 ENVIAR RECORDATORIOS POR WHATSAPP';
+                            alert('Proceso de envío iniciado correctamente.');
+                            btn.disabled = false; btn.innerText = '🚀 ENVIAR RECORDATORIOS MASIVOS';
                         }
                     </script>
                 </body>
                 </html>
             `);
             res.end();
-        } catch (e) { res.end(`Error: ${e.message}`); }
+        } catch (e) { res.end(`Error Sistema: ${e.message}`); }
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', () => { 
@@ -282,13 +280,14 @@ const server = http.createServer(async (req, res) => {
                 ${header}
                 <div class="container py-5">
                     <div class="card shadow p-4 mx-auto border-0" style="max-width: 450px;">
-                        <h4 class="mb-4 fw-bold">Estatus ONE4CARS</h4>
+                        <h4 class="mb-4 fw-bold text-dark">Estatus del Sistema</h4>
                         ${qrCodeData.startsWith('data') 
-                            ? `<img src="${qrCodeData}" class="img-fluid border rounded shadow-sm">` 
-                            : `<div class="alert alert-success fw-bold p-4 h2">${qrCodeData || "INICIANDO..."}</div>`
+                            ? `<img src="${qrCodeData}" class="img-fluid border rounded shadow-sm mb-3">` 
+                            : `<div class="alert alert-success fw-bold p-4 h2">${qrCodeData || "CONECTANDO..."}</div>`
                         }
+                        <p class="text-muted small">Escanee para activar la IA de ONE4CARS</p>
                         <hr>
-                        <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2 shadow">PANEL DE COBRANZA</a>
+                        <a href="/cobranza" class="btn btn-primary w-100 fw-bold shadow">PANEL DE COBRANZA</a>
                     </div>
                 </div>
             </body>
