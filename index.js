@@ -4,27 +4,52 @@ const qrcode = require('qrcode');
 const http = require('http');
 const url = require('url');
 const pino = require('pino');
+const axios = require('axios'); // Para obtener el dólar
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN DE IA (Actualizado para ONE4CARS 2026) ---
+// --- CONFIGURACIÓN DE IA (ONE4CARS 2026) ---
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
-// Se actualiza al modelo 2.5-flash que es el que devolvió éxito en el test previo
 const model = genAI.getGenerativeModel({ 
     model: "gemini-2.5-flash", 
-    generationConfig: { temperature: 0.7, maxOutputTokens: 800 }
+    generationConfig: { temperature: 0.8, maxOutputTokens: 1000 }
 });
 
 let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-// BASE DE CONOCIMIENTOS ONE4CARS (9 OPCIONES)
-const knowledgeBase = `Eres el asistente oficial de ONE4CARS. Empresa importadora de autopartes desde China a Venezuela.
-Tu objetivo es saludar cordialmente y guiar al usuario. 
+// FUNCIÓN PARA OBTENER PRECIO DEL DÓLAR
+async function getDolar() {
+    try {
+        // Nota: Se asume una API o servicio de monitoreo compatible. 
+        // Si no tienes una API paga, este es un ejemplo de estructura de retorno.
+        const response = await axios.get('https://pydolarve.org/api/v1/dollar?page=bcv'); 
+        const bcv = response.data.monitors.bcv.price || "Cargando...";
+        const paralelo = response.data.monitors.enparalelovzla.price || "Cargando...";
+        return `📈 *Tasa del Día:* BCV: Bs. ${bcv} | Paralelo: Bs. ${paralelo}`;
+    } catch (e) {
+        return "📈 *Tasa del Día:* Consultar en administración (Error de conexión).";
+    }
+}
 
-ENLACES OFICIALES:
+// BASE DE CONOCIMIENTOS CON PERSONALIDAD INDAGATORIA
+const knowledgeBase = (tasa) => `Eres el Asistente Inteligente de ONE4CARS (2026). 
+Empresa líder en importación de autopartes desde China para Venezuela. 
+Contamos con un Almacén General (bultos) y Almacén Intermedio (stock detallado).
+
+TONO Y PERSONALIDAD:
+- Eres extremadamente amable, servicial y profesional.
+- NO respondas siempre con la lista de opciones. 
+- Primero indaga: "¿En qué puedo apoyarte hoy con respecto a tus repuestos?" o "¿Buscas consultar algún precio o el estado de un despacho?".
+- Usa emojis de forma natural (🚗, 📦, 🛠️, 🇻🇪).
+- IMPORTANTE: Siempre menciona la tasa del día al inicio o final si el cliente pregunta por costos o pagos.
+- Si el cliente es vago, ofrece 2 o 3 opciones lógicas en lugar de las 9.
+
+${tasa}
+
+ENLACES OFICIALES PARA TU REFERENCIA:
 1. Medios de pago: https://www.one4cars.com/medios_de_pago.php/
 2. Estado de cuenta: https://www.one4cars.com/estado_de_cuenta.php/
 3. Lista de precios: https://www.one4cars.com/lista_de_precios.php/
@@ -33,12 +58,9 @@ ENLACES OFICIALES:
 6. Afiliar cliente: https://www.one4cars.com/afiliar_clientes.php/
 7. Consulta de productos: https://www.one4cars.com/consulta_productos.php/
 8. Seguimiento Despacho: https://www.one4cars.com/despacho.php/
-9. Asesor Humano: Indica que un operador revisará el caso pronto.
+9. Asesor Humano: Indica que un operador revisará el caso.
 
-INSTRUCCIONES:
-- Saluda siempre con emojis (🚗, 📦).
-- Si el cliente pregunta algo general, ofrece el menú de las 9 opciones.
-- Si pregunta algo específico (ej: pagos), dale el link directo.`;
+INSTRUCCIÓN ESPECIAL: Si el cliente agradece o se despide, cierra cordialmente invitándolo a volver.`;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -48,7 +70,7 @@ async function startBot() {
         version, 
         auth: state, 
         logger: pino({ level: 'silent' }), 
-        browser: ["ONE4CARS", "Chrome", "1.0.0"]
+        browser: ["ONE4CARS BOT", "Chrome", "1.0.0"]
     });
 
     socketBot = sock;
@@ -59,7 +81,7 @@ async function startBot() {
         if (qr) qrcode.toDataURL(qr, (err, url) => qrCodeData = url);
         if (connection === 'open') {
             qrCodeData = "ONLINE ✅";
-            console.log("Conectado exitosamente.");
+            console.log("Conectado a WhatsApp.");
         }
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -79,35 +101,24 @@ async function startBot() {
         if (text.length < 1) return;
 
         try {
-            if (!apiKey) throw new Error("Key no configurada");
-            // Se realiza la llamada a la conexión de Gemini
-            const result = await model.generateContent(`${knowledgeBase}\n\nCliente: ${text}\nAsistente:`);
+            const tasaActual = await getDolar();
+            const promptContext = knowledgeBase(tasaActual);
+            
+            const result = await model.generateContent(`${promptContext}\n\nCliente: ${text}\nAsistente (indagando amablemente):`);
             const response = await result.response;
-            await sock.sendMessage(from, { text: response.text() });
+            let respuestaIA = response.text();
+
+            await sock.sendMessage(from, { text: respuestaIA });
+
         } catch (e) {
             console.error("Error en Gemini:", e);
-            // RESPUESTA MANUAL SI FALLA LA IA (Detección de las 9 opciones)
             let saludo = "🚗 *¡Hola! Bienvenido a ONE4CARS* 📦\n\n";
-            if (textLow.includes("pago")) {
-                await sock.sendMessage(from, { text: saludo + "Para gestionar sus pagos: https://www.one4cars.com/medios_de_pago.php/" });
-            } else if (textLow.includes("cuenta") || textLow.includes("saldo")) {
-                await sock.sendMessage(from, { text: saludo + "Consulte su estado de cuenta aquí: https://www.one4cars.com/estado_de_cuenta.php/" });
-            } else if (textLow.includes("precio") || textLow.includes("lista")) {
-                await sock.sendMessage(from, { text: saludo + "Vea nuestra lista de precios: https://www.one4cars.com/lista_de_precios.php/" });
-            } else if (textLow.includes("pedido")) {
-                await sock.sendMessage(from, { text: saludo + "Realice sus pedidos aquí: https://www.one4cars.com/tomar_pedido.php/" });
-            } else if (textLow.includes("vendedor") || textLow.includes("mis clientes")) {
-                await sock.sendMessage(from, { text: saludo + "Gestión de vendedores: https://www.one4cars.com/mis_clientes.php/" });
-            } else if (textLow.includes("afiliar") || textLow.includes("registro")) {
-                await sock.sendMessage(from, { text: saludo + "Afíliese con nosotros: https://www.one4cars.com/afiliar_clientes.php/" });
-            } else if (textLow.includes("producto")) {
-                await sock.sendMessage(from, { text: saludo + "Consulte productos: https://www.one4cars.com/consulta_productos.php/" });
-            } else if (textLow.includes("despacho") || textLow.includes("envio")) {
-                await sock.sendMessage(from, { text: saludo + "Siga su despacho: https://www.one4cars.com/despacho.php/" });
-            } else {
-                const menu = `He recibido su mensaje. Aquí tiene nuestro menú completo:\n\n1️⃣ Pagos\n2️⃣ Estado de Cuenta\n3️⃣ Lista de Precios\n4️⃣ Tomar Pedido\n5️⃣ Mis Clientes\n6️⃣ Afiliar Cliente\n7️⃣ Consulta Productos\n8️⃣ Despacho\n9️⃣ Asesor Humano\n\n_Escriba su duda o seleccione una opción._`;
-                await sock.sendMessage(from, { text: saludo + menu });
-            }
+            let fallbackMsg = "Disculpe, estoy experimentando un breve inconveniente técnico. ¿Desea que le ayude con sus pagos, lista de precios o el estado de su pedido?";
+            
+            if (textLow.includes("pago")) fallbackMsg = "Para sus pagos: https://www.one4cars.com/medios_de_pago.php/";
+            else if (textLow.includes("precio")) fallbackMsg = "Lista de precios: https://www.one4cars.com/lista_de_precios.php/";
+            
+            await sock.sendMessage(from, { text: saludo + fallbackMsg });
         }
     });
 }
@@ -115,13 +126,12 @@ async function startBot() {
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
-    // HEADER PHP COMPLETO (Se mantiene según instrucción)
     const header = `
         <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center">
                     <h4 class="m-0 text-primary fw-bold">🚗 ONE4CARS</h4>
-                    <span class="ms-3 badge bg-secondary d-none d-md-inline">Panel Administrativo</span>
+                    <span class="ms-3 badge bg-secondary d-none d-md-inline">Panel Administrativo 2026</span>
                 </div>
                 <nav>
                     <a href="/" class="text-white me-3 text-decoration-none small">Estado Bot</a>
@@ -153,7 +163,7 @@ const server = http.createServer(async (req, res) => {
                         <div class="d-flex justify-content-between align-items-center mb-4">
                             <h3>Gestión de Cobranza</h3>
                             <div class="text-end">
-                                <span class="badge bg-danger">Facturas: ${d.length}</span>
+                                <span class="badge bg-danger">Facturas Pendientes: ${d.length}</span>
                             </div>
                         </div>
 
@@ -220,7 +230,7 @@ const server = http.createServer(async (req, res) => {
                             const b = document.getElementById('btnSend');
                             b.disabled = true; b.innerText = 'ENVIANDO...';
                             await fetch('/enviar-cobranza', { method:'POST', body: JSON.stringify({facturas:selected}) });
-                            alert('Envío iniciado correctamente');
+                            alert('Envío de recordatorios iniciado correctamente');
                             b.disabled = false; b.innerText = '🚀 ENVIAR RECORDATORIOS MASIVOS';
                         }
                     </script>
@@ -228,7 +238,7 @@ const server = http.createServer(async (req, res) => {
                 </html>
             `);
             res.end();
-        } catch (e) { res.end(`Error SQL: ${e.message}`); }
+        } catch (e) { res.end(`Error SQL en Cobranza: ${e.message}`); }
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', () => { 
@@ -246,14 +256,14 @@ const server = http.createServer(async (req, res) => {
                 ${header}
                 <div class="container py-5">
                     <div class="card shadow p-4 mx-auto" style="max-width: 450px;">
-                        <h4 class="mb-4">Status de Conexión</h4>
+                        <h4 class="mb-4">Estatus Conexión WhatsApp</h4>
                         <div class="mb-4">
                             ${qrCodeData.startsWith('data') 
                                 ? `<img src="${qrCodeData}" class="border shadow rounded p-2 bg-white" style="width: 250px;">` 
                                 : `<div class="alert alert-success fw-bold p-4 h2">${qrCodeData || "Iniciando..."}</div>`
                             }
                         </div>
-                        <p class="text-muted small">Escanee el código para activar el servicio de ONE4CARS</p>
+                        <p class="text-muted small">Escanee para activar la IA de ONE4CARS</p>
                         <hr>
                         <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2">IR AL PANEL DE COBRANZA</a>
                     </div>
