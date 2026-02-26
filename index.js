@@ -7,11 +7,12 @@ const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN DE IA ---
+// --- CONFIGURACIÓN DE IA (Actualizado para ONE4CARS 2026) ---
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
+// Se actualiza al modelo 2.5-flash que es el que devolvió éxito en el test previo
 const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash",
+    model: "gemini-2.5-flash", 
     generationConfig: { temperature: 0.7, maxOutputTokens: 800 }
 });
 
@@ -79,10 +80,12 @@ async function startBot() {
 
         try {
             if (!apiKey) throw new Error("Key no configurada");
+            // Se realiza la llamada a la conexión de Gemini
             const result = await model.generateContent(`${knowledgeBase}\n\nCliente: ${text}\nAsistente:`);
             const response = await result.response;
             await sock.sendMessage(from, { text: response.text() });
         } catch (e) {
+            console.error("Error en Gemini:", e);
             // RESPUESTA MANUAL SI FALLA LA IA (Detección de las 9 opciones)
             let saludo = "🚗 *¡Hola! Bienvenido a ONE4CARS* 📦\n\n";
             if (textLow.includes("pago")) {
@@ -112,7 +115,7 @@ async function startBot() {
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
-    // HEADER PHP COMPLETO
+    // HEADER PHP COMPLETO (Se mantiene según instrucción)
     const header = `
         <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
