@@ -4,7 +4,7 @@ const qrcode = require('qrcode');
 const http = require('http');
 const url = require('url');
 const pino = require('pino');
-const axios = require('axios'); // API para el dólar
+const axios = require('axios');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
@@ -13,29 +13,53 @@ const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({ 
     model: "gemini-2.5-flash", 
-    generationConfig: { temperature: 0.6, maxOutputTokens: 1000 }
+    generationConfig: { temperature: 0.5, maxOutputTokens: 1000 }
 });
 
 let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-/**
- * RUTINA PARA OBTENER EL DÓLAR (API)
- * Como solicitaste, esta función busca la cotización real.
- */
-async function getDolar() {
+// --- LÓGICA DE OBTENCIÓN DE DÓLAR (TRANSCRIPCIÓN FIEL DE TU PHP A JS) ---
+// Simulamos el $_SESSION en un objeto global para el entorno de Node.js
+let _SESSION = {};
+
+async function obtener_dolar_con_cache(type) {
+    const cache_key = 'dolar_' + type;
+    const cache_time_key = 'dolar_' + type + '_time';
+    const cache_duration = 900; // 15 min
+
+    if (_SESSION[cache_key] && _SESSION[cache_time_key] && (Math.floor(Date.now() / 1000) - _SESSION[cache_time_key] < cache_duration)) {
+        return parseFloat(_SESSION[cache_key]);
+    }
+
+    const targetUrl = (type === 'oficial') 
+        ? "https://api.dolarvzla.com/public/exchange-rate" 
+        : "https://ve.dolarapi.com/v1/dolares/paralelo";
+
+    const get_fallback = () => {
+        return (_SESSION[cache_key] && !isNaN(_SESSION[cache_key])) ? parseFloat(_SESSION[cache_key]) : 0.0;
+    };
+
     try {
-        const response = await axios.get('https://pydolarve.org/api/v1/dollar?page=bcv', { timeout: 5000 }); 
-        const bcv = response.data.monitors.bcv.price;
-        const paralelo = response.data.monitors.enparalelovzla.price;
-        return `📈 *COTIZACIÓN ACTUAL:* \n- BCV: Bs. ${bcv}\n- Paralelo: Bs. ${paralelo}`;
+        const res = await axios.get(targetUrl, { timeout: 7000 });
+        const data = res.data;
+        let valor = (type === 'oficial') ? (data.current?.usd ?? 0.0) : (data.promedio ?? 0.0);
+
+        if (valor <= 0) return get_fallback();
+
+        _SESSION[cache_key] = parseFloat(valor);
+        _SESSION[cache_time_key] = Math.floor(Date.now() / 1000);
+        return parseFloat(valor);
     } catch (e) {
-        return "📈 *Tasa del Día:* Por favor, consulte con administración para la tasa exacta de facturación.";
+        return get_fallback();
     }
 }
 
-// DEFINICIÓN DE LAS 9 OPCIONES (COMPLETA)
+async function obtenerDolarOficial() { return await obtener_dolar_con_cache('oficial'); }
+async function obtenerDolarParalelo() { return await obtener_dolar_con_cache('paralelo'); }
+
+// --- COMPONENTES DE MENSAJERÍA ---
 const MENU_COMPLETO = `🛠️ *MENÚ DE OPCIONES ONE4CARS* 🚗
 
 1. 💰 *Medios de pago:* https://www.one4cars.com/medios_de_pago.php/
@@ -46,21 +70,19 @@ const MENU_COMPLETO = `🛠️ *MENÚ DE OPCIONES ONE4CARS* 🚗
 6. 📝 *Afiliar cliente:* https://www.one4cars.com/afiliar_clientes.php/
 7. 🔍 *Consulta de productos:* https://www.one4cars.com/consulta_productos.php/
 8. 🚚 *Seguimiento Despacho:* https://www.one4cars.com/despacho.php/
-9. 👨‍💼 *Asesor Humano:* Un operador le atenderá en breve.`;
+9. 👨‍💼 *Asesor Humano:* Un operador revisará su requerimiento pronto.`;
 
-// PROMPT DE CONOCIMIENTOS PARA LA IA
-const knowledgeBase = (tasa) => `Eres el Asistente Inteligente de ONE4CARS. 
-Empresa importadora de autopartes desde China (Venezuela 2026).
-Tasa: ${tasa}.
+const knowledgeBase = (oficial, paralelo) => `Eres el Asistente Inteligente de ONE4CARS (2026).
+Empresa importadora de autopartes desde China.
+Dólar Oficial (BCV): Bs. ${oficial} | Dólar Paralelo: Bs. ${paralelo}.
 
-INSTRUCCIONES DE COMPORTAMIENTO:
-- NO digas que eres Juan. Tú eres el Asistente de ONE4CARS.
-- Sé amable e indaga: "¿En qué puedo apoyarte hoy con tus repuestos?"
-- Si el cliente es VENDEDOR, enfócate en ayudarlo con Tomar Pedidos y Gestión de Clientes.
-- Si pide PRECIOS, envíale: https://www.one4cars.com/lista_de_precios.php/
-- Si pide el MENÚ, envía las 9 opciones completas.
-- Si el cliente es curioso, sospecha su necesidad y guíalo al link correcto.
-- NO seas repetitivo.`;
+REGLAS:
+- No eres Juan. Eres el asistente.
+- Si el usuario parece interesado en algo, indaga amablemente antes de soltar links.
+- Si pide la tasa, dala de inmediato.
+- Si es VENDEDOR, prioriza las opciones 4 y 5.
+- Si pide el menú o no sabe qué hacer, envía las 9 opciones completas.
+- No seas repetitivo.`;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -96,33 +118,28 @@ async function startBot() {
         const textLow = text.toLowerCase();
 
         try {
-            const tasaHoy = await getDolar();
+            const dolarOficial = await obtenerDolarOficial();
+            const dolarParalelo = await obtenerDolarParalelo();
 
-            // RESPUESTAS DIRECTAS (No pasan por IA para evitar fallos)
-            if (textLow === "menú" || textLow === "menu" || textLow === "opciones") {
+            if (textLow === "menu" || textLow === "menú" || textLow === "opciones") {
                 return await sock.sendMessage(from, { text: MENU_COMPLETO });
             }
 
             if (textLow.includes("tasa") || textLow.includes("bcv") || textLow.includes("dolar")) {
-                return await sock.sendMessage(from, { text: `${tasaHoy}\n\n¿Deseas consultar la disponibilidad de algún producto con esta tasa?` });
+                return await sock.sendMessage(from, { text: `📈 *TASAS DE HOY*\nOficial: Bs. ${dolarOficial}\nParalelo: Bs. ${dolarParalelo}\n\n¿Deseas consultar algún precio?` });
             }
 
-            // PROCESO DE INDAGACIÓN CON IA
-            const result = await model.generateContent(`${knowledgeBase(tasaHoy)}\n\nCliente: ${text}\nAsistente:`);
+            const result = await model.generateContent(`${knowledgeBase(dolarOficial, dolarParalelo)}\n\nCliente: ${text}\nAsistente (Indaga amablemente):`);
             const response = await result.response;
-            let finalMsg = response.text();
-
-            await sock.sendMessage(from, { text: finalMsg });
+            await sock.sendMessage(from, { text: response.text() });
 
         } catch (e) {
-            console.error("Error en flujo principal:", e);
-            // Fallback: Mensaje amable + menú en caso de que todo falle
-            await sock.sendMessage(from, { text: `¡Hola! 👋 Bienvenido a ONE4CARS. Para ayudarte mejor, aquí tienes nuestras opciones principales:\n\n${MENU_COMPLETO}` });
+            await sock.sendMessage(from, { text: "🚗 *ONE4CARS:* Hola, ¿en qué puedo ayudarte hoy? Si deseas ver nuestras opciones escribe *MENU*." });
         }
     });
 }
 
-// --- SERVIDOR HTTP CON TODO EL SISTEMA DE COBRANZA Y HEADER PHP ---
+// --- SERVIDOR HTTP CON HEADER PHP Y PANEL DE COBRANZA COMPLETO ---
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
@@ -131,7 +148,7 @@ const server = http.createServer(async (req, res) => {
             <div class="container d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center">
                     <h4 class="m-0 text-primary fw-bold">🚗 ONE4CARS</h4>
-                    <span class="ms-3 badge bg-secondary d-none d-md-inline">Administración v2026</span>
+                    <span class="ms-3 badge bg-secondary d-none d-md-inline">Administración 2026</span>
                 </div>
                 <nav>
                     <a href="/" class="text-white me-3 text-decoration-none small">Estado Bot</a>
@@ -152,41 +169,48 @@ const server = http.createServer(async (req, res) => {
                 <head>
                     <title>Cobranza - ONE4CARS</title>
                     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+                    <style>
+                        .table-container { max-height: 600px; overflow-y: auto; border: 1px solid #ddd; }
+                        thead th { position: sticky; top: 0; background: #212529; color: white; z-index: 10; }
+                    </style>
                 </head>
                 <body class="bg-light">
                     ${header}
                     <div class="container-fluid px-4">
                         <div class="card shadow-sm mb-4">
                             <div class="card-body">
-                                <h5 class="mb-3 text-muted">Filtrar Cuentas por Cobrar</h5>
-                                <form class="row g-2">
+                                <h3>Gestión de Cobranza</h3>
+                                <form class="row g-2 mt-3">
                                     <div class="col-md-3">
+                                        <label class="small fw-bold">Vendedor</label>
                                         <select name="vendedor" class="form-select">
-                                            <option value="">-- Vendedor --</option>
+                                            <option value="">-- Todos --</option>
                                             ${v.map(i => `<option value="${i.nombre}">${i.nombre}</option>`).join('')}
                                         </select>
                                     </div>
                                     <div class="col-md-3">
+                                        <label class="small fw-bold">Zona</label>
                                         <select name="zona" class="form-select">
-                                            <option value="">-- Zona --</option>
+                                            <option value="">-- Todas --</option>
                                             ${z.map(i => `<option value="${i.zona}">${i.zona}</option>`).join('')}
                                         </select>
                                     </div>
                                     <div class="col-md-2">
-                                        <input type="number" name="dias" class="form-control" placeholder="Días" value="${parsedUrl.query.dias || 0}">
+                                        <label class="small fw-bold">Días</label>
+                                        <input type="number" name="dias" class="form-control" value="${parsedUrl.query.dias || 0}">
                                     </div>
-                                    <div class="col-md-4">
-                                        <button class="btn btn-primary w-100 fw-bold">ACTUALIZAR LISTADO</button>
+                                    <div class="col-md-4 d-flex align-items-end">
+                                        <button class="btn btn-dark w-100 fw-bold">FILTRAR DEUDORES</button>
                                     </div>
                                 </form>
                             </div>
                         </div>
 
                         <div class="card shadow-sm">
-                            <div class="table-responsive" style="max-height: 550px;">
-                                <table class="table table-hover align-middle m-0">
-                                    <thead class="table-dark">
-                                        <tr class="text-center">
+                            <div class="table-container rounded">
+                                <table class="table table-hover table-sm text-center align-middle m-0">
+                                    <thead>
+                                        <tr>
                                             <th><input type="checkbox" id="selectAll" class="form-check-input"></th>
                                             <th class="text-start">Cliente</th>
                                             <th>Factura</th>
@@ -197,10 +221,10 @@ const server = http.createServer(async (req, res) => {
                                     </thead>
                                     <tbody>
                                         ${d.map(i => `
-                                            <tr class="text-center">
+                                            <tr>
                                                 <td><input type="checkbox" class="rowCheck form-check-input" value='${JSON.stringify(i)}'></td>
-                                                <td class="text-start"><strong>${i.nombres}</strong></td>
-                                                <td><span class="badge bg-light text-dark">${i.nro_factura}</span></td>
+                                                <td class="text-start"><small><strong>${i.nombres}</strong></small></td>
+                                                <td><span class="badge bg-light text-dark border">${i.nro_factura}</span></td>
                                                 <td class="text-danger fw-bold">$${parseFloat(i.saldo_pendiente).toFixed(2)}</td>
                                                 <td class="text-primary">Bs. ${parseFloat(i.saldo_bolivares).toFixed(2)}</td>
                                                 <td><span class="badge ${i.dias_transcurridos > 15 ? 'bg-danger' : 'bg-success'}">${i.dias_transcurridos}</span></td>
@@ -209,34 +233,35 @@ const server = http.createServer(async (req, res) => {
                                     </tbody>
                                 </table>
                             </div>
-                            <div class="card-footer bg-white p-3">
-                                <button onclick="enviar()" id="btnSend" class="btn btn-success btn-lg w-100 fw-bold shadow">🚀 ENVIAR RECORDATORIOS MASIVOS</button>
+                            <div class="card-footer">
+                                <button onclick="enviar()" id="btnSend" class="btn btn-success btn-lg w-100 fw-bold py-3 shadow">🚀 ENVIAR RECORDATORIOS MASIVOS</button>
                             </div>
                         </div>
                     </div>
+
                     <script>
                         document.getElementById('selectAll').onclick = function() {
                             document.querySelectorAll('.rowCheck').forEach(c => c.checked = this.checked);
-                        };
+                        }
                         async function enviar() {
                             const selected = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => JSON.parse(cb.value));
                             if(selected.length === 0) return alert('Seleccione clientes');
-                            const btn = document.getElementById('btnSend');
-                            btn.disabled = true; btn.innerText = 'ENVIANDO...';
+                            const b = document.getElementById('btnSend');
+                            b.disabled = true; b.innerText = 'ENVIANDO...';
                             await fetch('/enviar-cobranza', { 
                                 method:'POST', 
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({facturas:selected}) 
                             });
-                            alert('Envío programado correctamente.');
-                            btn.disabled = false; btn.innerText = '🚀 ENVIAR RECORDATORIOS MASIVOS';
+                            alert('Envío de mensajes iniciado.');
+                            b.disabled = false; b.innerText = '🚀 ENVIAR RECORDATORIOS MASIVOS';
                         }
                     </script>
                 </body>
                 </html>
             `);
             res.end();
-        } catch (e) { res.end(`Error: ${e.message}`); }
+        } catch (e) { res.end(`Error SQL: ${e.message}`); }
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', () => { 
@@ -252,14 +277,16 @@ const server = http.createServer(async (req, res) => {
                 ${header}
                 <div class="container py-5">
                     <div class="card shadow p-4 mx-auto" style="max-width: 450px;">
-                        <h4 class="mb-4">Conexión de IA ONE4CARS</h4>
-                        ${qrCodeData.startsWith('data') 
-                            ? `<img src="${qrCodeData}" class="border rounded p-2 shadow-sm mb-3">` 
-                            : `<div class="alert alert-success fw-bold p-4 h2">${qrCodeData || "INICIANDO..."}</div>`
-                        }
-                        <p class="text-muted small">Escanee para activar la gestión de autopartes</p>
+                        <h4 class="mb-4">Estatus Conexión WhatsApp</h4>
+                        <div class="mb-4">
+                            ${qrCodeData.startsWith('data') 
+                                ? `<img src="${qrCodeData}" class="border shadow rounded p-2 bg-white" style="width: 250px;">` 
+                                : `<div class="alert alert-success fw-bold p-4 h2">${qrCodeData || "Iniciando..."}</div>`
+                            }
+                        </div>
+                        <p class="text-muted small">Escanee el código para activar ONE4CARS</p>
                         <hr>
-                        <a href="/cobranza" class="btn btn-primary w-100 fw-bold">PANEL DE COBRANZA</a>
+                        <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2">IR AL PANEL DE COBRANZA</a>
                     </div>
                 </div>
             </body>
