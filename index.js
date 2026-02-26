@@ -64,37 +64,55 @@ async function startBot() {
         }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+   sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
         const text = (msg.message.conversation || 
-                      msg.message.extendedTextMessage?.text || 
-                      msg.message.imageMessage?.caption || "").trim();
+                      msg.message.extendedTextMessage?.text || "").trim();
 
         if (text.length < 1) return;
 
         try {
-            // Verificamos si la API Key existe en Render
-            if (!apiKey) {
-                throw new Error("API_KEY_NOT_SET");
-            }
+            if (!apiKey) throw new Error("API_KEY_MISSING");
 
-            const prompt = `${knowledgeBase}\n\nPregunta del cliente: "${text}"\nRespuesta profesional ONE4CARS:`;
+            // Prompt ultra-detallado para que Gemini decida qué hacer
+            const prompt = `
+            Eres el asistente de ONE4CARS. 
+            Tu misión: Saludar amablemente y analizar lo que el cliente necesita.
+            
+            OPCIONES DISPONIBLES:
+            1. Pagos: https://www.one4cars.com/medios_de_pago.php/
+            2. Estado de Cuenta: https://www.one4cars.com/estado_de_cuenta.php/
+            3. Lista de Precios: https://www.one4cars.com/lista_de_precios.php/
+            4. Tomar Pedido: https://www.one4cars.com/tomar_pedido.php/
+            5. Mis Clientes: https://www.one4cars.com/mis_clientes.php/
+            6. Afiliar Cliente: https://www.one4cars.com/afiliar_clientes.php/
+            7. Consulta Productos: https://www.one4cars.com/consulta_productos.php/
+            8. Despacho: https://www.one4cars.com/despacho.php/
+            9. Asesor Humano: (Indicar que será atendido pronto).
+
+            REGLAS DE RESPUESTA:
+            - Si el cliente saluda o pregunta cosas generales: Saluda y presenta el MENÚ COMPLETO de las 9 opciones con sus links.
+            - Si el cliente pide algo ESPECÍFICO (ej: "¿Cómo pago?", "¿Dónde está mi pedido?"): Saluda, responde específicamente a esa duda con su link directo y menciona que si necesita algo más, puede consultar las otras opciones.
+            - Usa emojis de carros y cajas (🚗, 📦).
+
+            Mensaje del cliente: "${text}"
+            Respuesta de ONE4CARS:`;
+
             const result = await model.generateContent(prompt);
             const response = await result.response;
             const replyText = response.text();
             
-            if (replyText) {
-                await sock.sendMessage(from, { text: replyText });
-            }
+            await sock.sendMessage(from, { text: replyText });
+
         } catch (e) {
-            console.error("Error en IA Gemini:", e.message);
-            // Menú de emergencia si la IA falla (Bloqueo regional o falta de Key)
-            const fallback = `🚗 *ONE4CARS - Asistente Virtual*\n\nHola, para ayudarte mejor por favor utiliza nuestros enlaces directos:\n\n1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/\n2️⃣ *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/\n3️⃣ *Precios:* https://www.one4cars.com/lista_de_precios.php/\n4️⃣ *Pedidos:* https://www.one4cars.com/tomar_pedido.php/\n\nUn asesor humano también revisará tu mensaje pronto.`;
-            await sock.sendMessage(from, { text: fallback });
+            console.error("Error en IA:", e.message);
+            // Solo si Gemini falla del todo, mandamos el menú fijo para no dejar al cliente solo
+            const menuCompletoManual = `🚗 *Bienvenido a ONE4CARS* 📦\n\nHola, detectamos un problema de conexión con nuestro cerebro de IA, pero aquí tienes todas nuestras opciones disponibles:\n\n1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/\n2️⃣ *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/\n3️⃣ *Precios:* https://www.one4cars.com/lista_de_precios.php/\n4️⃣ *Pedidos:* https://www.one4cars.com/tomar_pedido.php/\n5️⃣ *Vendedores:* https://www.one4cars.com/mis_clientes.php/\n6️⃣ *Afiliarse:* https://www.one4cars.com/afiliar_clientes.php/\n7️⃣ *Productos:* https://www.one4cars.com/consulta_productos.php/\n8️⃣ *Despacho:* https://www.one4cars.com/despacho.php/\n9️⃣ *Asesor:* Un operador te contactará.\n\n¿En qué podemos ayudarte hoy?`;
+            await sock.sendMessage(from, { text: menuCompletoManual });
         }
     });
 }
