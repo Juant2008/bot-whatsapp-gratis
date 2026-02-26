@@ -64,56 +64,58 @@ async function startBot() {
         }
     });
 
-   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+        const text = (msg.message.conversation || 
+                      msg.message.extendedTextMessage?.text || "").trim().toLowerCase();
 
         if (text.length < 1) return;
 
+        // --- LÓGICA DE RESPUESTA ---
         try {
-            // VERIFICACIÓN DE SEGURIDAD DE LA LLAVE
-            if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "") {
-                console.error("⚠️ ALERTA: La variable GEMINI_API_KEY está vacía en Render.");
-                throw new Error("NO_KEY");
-            }
-
-            const prompt = `
-            Eres el asistente inteligente de ONE4CARS. 
-            Misión: Saludar cordialmente y ayudar con autopartes.
-            
-            MENÚ DE OPCIONES (USA SIEMPRE ESTOS LINKS):
+            // 1. Intentar con Gemini
+            const prompt = `Eres el asistente de ONE4CARS (Venezuela). 
+            SIEMPRE SALUDA amablemente.
+            Si el cliente pide algo general, ofrece estas 9 opciones con sus links:
             1. Pagos: https://www.one4cars.com/medios_de_pago.php/
             2. Estado de Cuenta: https://www.one4cars.com/estado_de_cuenta.php/
-            3. Lista de Precios: https://www.one4cars.com/lista_de_precios.php/
-            4. Tomar Pedido: https://www.one4cars.com/tomar_pedido.php/
+            3. Precios: https://www.one4cars.com/lista_de_precios.php/
+            4. Pedidos: https://www.one4cars.com/tomar_pedido.php/
             5. Mis Clientes: https://www.one4cars.com/mis_clientes.php/
-            6. Afiliar Cliente: https://www.one4cars.com/afiliar_clientes.php/
-            7. Consulta Productos: https://www.one4cars.com/consulta_productos.php/
+            6. Afiliarse: https://www.one4cars.com/afiliar_clientes.php/
+            7. Productos: https://www.one4cars.com/consulta_productos.php/
             8. Despacho: https://www.one4cars.com/despacho.php/
-            9. Asesor Humano: Indicar que será atendido pronto.
-
-            REGLAS:
-            - Si el cliente saluda o está indeciso: Envía el saludo y el menú completo de 9 puntos.
-            - Si pide algo específico: Responde con el link directo de esa opción y ofrece ayuda adicional.
-            - Usa emojis de 🚗 y 📦.`;
+            9. Asesor Humano: Un operador le atenderá.
+            
+            Si pide una opción específica, saluda y dale SOLO el link de esa opción.
+            Mensaje del cliente: "${text}"`;
 
             const result = await model.generateContent(prompt);
             const response = await result.response;
-            const replyText = response.text();
+            const reply = response.text();
             
-            await sock.sendMessage(from, { text: replyText });
+            await sock.sendMessage(from, { text: reply });
 
         } catch (e) {
-            console.error("❌ ERROR CRÍTICO IA:", e.message);
-            
-            // MENÚ COMPLETO MANUAL (El que tú quieres que salga si Gemini no responde)
-            const menuCompleto = `🚗 *¡Hola! Bienvenido a ONE4CARS* 📦\n\nDetectamos una interrupción en nuestra IA, pero aquí tienes nuestro menú completo para ayudarte de inmediato:\n\n1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/\n2️⃣ *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/\n3️⃣ *Precios:* https://www.one4cars.com/lista_de_precios.php/\n4️⃣ *Pedidos:* https://www.one4cars.com/tomar_pedido.php/\n5️⃣ *Vendedores:* https://www.one4cars.com/mis_clientes.php/\n6️⃣ *Afiliarse:* https://www.one4cars.com/afiliar_clientes.php/\n7️⃣ *Productos:* https://www.one4cars.com/consulta_productos.php/\n8️⃣ *Despacho:* https://www.one4cars.com/despacho.php/\n9️⃣ *Asesor Humano:* Escribe tu duda y te atenderemos.\n\n_¿En qué podemos servirle hoy?_`;
-            
-            await sock.sendMessage(from, { text: menuCompleto });
+            // 2. RESPUESTA DE RESPALDO (Si Gemini falla por bloqueo en Venezuela)
+            // Aquí personalizamos manualmente según palabras clave
+            let saludo = "🚗 *¡Hola! Bienvenido a ONE4CARS* 📦\n\n";
+            let menu = `Nuestros servicios disponibles:\n\n1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/\n2️⃣ *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/\n3️⃣ *Precios:* https://www.one4cars.com/lista_de_precios.php/\n4️⃣ *Pedidos:* https://www.one4cars.com/tomar_pedido.php/\n5️⃣ *Vendedores:* https://www.one4cars.com/mis_clientes.php/\n6️⃣ *Afiliarse:* https://www.one4cars.com/afiliar_clientes.php/\n7️⃣ *Productos:* https://www.one4cars.com/consulta_productos.php/\n8️⃣ *Despacho:* https://www.one4cars.com/despacho.php/\n9️⃣ *Asesor Humano:* Escribe tu duda.\n\n_¿Cómo podemos ayudarte?_`;
+
+            if (text.includes("pago") || text.includes("pagar")) {
+                await sock.sendMessage(from, { text: saludo + "Para gestionar sus pagos, utilice este enlace: https://www.one4cars.com/medios_de_pago.php/" });
+            } else if (text.includes("precio") || text.includes("catalogo") || text.includes("cuanto cuesta")) {
+                await sock.sendMessage(from, { text: saludo + "Consulte nuestra lista de precios actualizada aquí: https://www.one4cars.com/lista_de_precios.php/" });
+            } else if (text.includes("cuenta") || text.includes("debo") || text.includes("saldo")) {
+                await sock.sendMessage(from, { text: saludo + "Puede ver su estado de cuenta en tiempo real aquí: https://www.one4cars.com/estado_de_cuenta.php/" });
+            } else {
+                // Si no detecta palabra clave, manda el saludo con las 9 opciones
+                await sock.sendMessage(from, { text: saludo + menu });
+            }
         }
     });
 }
