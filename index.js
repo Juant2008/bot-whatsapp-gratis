@@ -34,7 +34,7 @@ async function obtener_dolar_con_cache(type) {
     }
 
     const targetUrl = (type === 'oficial') 
-        ? "https://api.dolarvzla.com/public/exchange-rate" 
+        ? "https://https://ve.dolarapi.com/v1/dolares/oficial" 
         : "https://ve.dolarapi.com/v1/dolares/paralelo";
 
     const get_fallback = () => {
