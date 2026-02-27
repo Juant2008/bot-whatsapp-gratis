@@ -2,22 +2,22 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
-const https = require('https'); // Necesario para las APIs del dólar
+const https = require('https');
 const url = require('url');
+const fs = require('fs'); // Módulo para leer archivos
+const path = require('path');
 const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN DE IA (Actualizado para ONE4CARS 2026) ---
+// --- CONFIGURACIÓN DE IA ---
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// Configuración del modelo:
-// Se utiliza gemini-2.5-flash como solicitaste, ideal para velocidad y precisión.
 const model = genAI.getGenerativeModel({ 
     model: "gemini-2.5-flash", 
     generationConfig: { 
-        temperature: 0.7, // Creatividad moderada para el tono venezolano
+        temperature: 0.7, 
         maxOutputTokens: 1000 
     }
 });
@@ -27,7 +27,6 @@ let socketBot = null;
 const port = process.env.PORT || 10000;
 
 // --- FUNCIÓN AUXILIAR PARA CONSULTAR API DE DÓLAR ---
-// Usamos https nativo para no depender de librerías externas como axios
 function obtenerTasa(apiUrl) {
     return new Promise((resolve) => {
         https.get(apiUrl, (res) => {
@@ -36,7 +35,6 @@ function obtenerTasa(apiUrl) {
             res.on('end', () => {
                 try {
                     const json = JSON.parse(data);
-                    // Retornamos el valor 'promedio' según tu instrucción
                     resolve(json.promedio || null);
                 } catch (e) {
                     resolve(null);
@@ -46,9 +44,8 @@ function obtenerTasa(apiUrl) {
     });
 }
 
-// --- GENERADOR DE PROMPT DINÁMICO ---
-// Esta función construye el "Cerebro" del bot en cada mensaje, inyectando los datos actuales.
-async function construirInstrucciones() {
+// --- GENERADOR DE PROMPT DINÁMICO (Cerebro Externo + Nombre) ---
+async function construirInstrucciones(nombreCliente) {
     // 1. Obtener tasas en tiempo real
     const tasaOficial = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
     const tasaParalelo = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/paralelo');
@@ -57,47 +54,28 @@ async function construirInstrucciones() {
     const txtParalelo = tasaParalelo ? `Bs. ${tasaParalelo}` : "No disponible";
     const fecha = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
 
-    // 2. Definir el System Prompt completo sin simplificar nada
-    return `
-    ROL: Eres ONE4-Bot, el asistente experto de ONE4CARS, empresa importadora de autopartes desde China a Venezuela.
-    FECHA Y HORA ACTUAL: ${fecha}
+    // 2. Leer el archivo de texto externo (instrucciones.txt)
+    // Esto permite que edites el archivo sin reiniciar el bot
+    let baseConocimiento = "";
+    try {
+        baseConocimiento = fs.readFileSync(path.join(__dirname, 'instrucciones.txt'), 'utf-8');
+    } catch (err) {
+        console.error("Error leyendo instrucciones.txt, usando backup básico.");
+        baseConocimiento = "Eres un asistente de ONE4CARS. Ayuda al cliente.";
+    }
 
-    --- DATOS ECONÓMICOS EN TIEMPO REAL (INFORMATIVO) ---
+    // 3. Inyectar Datos Dinámicos al Prompt
+    return `
+    ${baseConocimiento}
+
+    --- DATOS DE CONTEXTO ACTUAL ---
+    FECHA Y HORA: ${fecha}
+    CLIENTE CON EL QUE HABLAS: ${nombreCliente || "Cliente Estimado"}
+    (Usa el nombre del cliente para personalizar el trato si es apropiado).
+
+    --- INDICADORES ECONÓMICOS AL INSTANTE ---
     Dólar Oficial (BCV): ${txtOficial}
     Dólar Paralelo: ${txtParalelo}
-    (Si el cliente pregunta por el precio del dólar, informa estos valores con exactitud).
-
-    --- 1. IDENTIDAD Y TONO (PERSONALIDAD VENEZOLANA) ---
-    - Tu tono es profesional, servicial y genuinamente venezolano.
-    - Bienvenida Dinámica: En el primer contacto, genera saludos aleatorios y cordiales. Interésate por el bienestar del cliente.
-      Ejemplos: "¿Cómo está todo, estimado? Espero que tenga un excelente día." o "¡Buen día! Un gusto saludarle, ¿cómo va la jornada por allá?".
-    - Lenguaje: Usa términos como "Estimado cliente", "A su orden", "Estamos a su disposición", "Un gusto".
-
-    --- 2. DETECCIÓN DE INTENCIONES Y ENLACES OFICIALES ---
-    Si detectas estas intenciones, responde humanamente y entrega EL ENLACE EXACTO:
-    1. Medios de pago -> https://www.one4cars.com/medios_de_pago.php/
-    2. Estado de cuenta -> https://www.one4cars.com/estado_de_cuenta.php/
-    3. Lista de precios -> https://www.one4cars.com/lista_de_precios.php/
-    4. Tomar pedido -> https://www.one4cars.com/tomar_pedido.php/
-    5. Mis clientes/Vendedores -> https://www.one4cars.com/mis_clientes.php/
-    6. Afiliar cliente -> https://www.one4cars.com/afiliar_clientes.php/
-    7. Consulta de productos -> https://www.one4cars.com/consulta_productos.php/
-    8. Seguimiento Despacho -> https://www.one4cars.com/despacho.php/
-    9. Asesor Humano -> Indica que un operador revisará el caso pronto.
-
-    --- 3. PAUTAS DE EXPERTO EN PRODUCTOS ONE4CARS ---
-    - Validación de Identidad: Antes de dar información privada (saldos, stock detallado, precios), solicita el RIF o Cédula registrado.
-    - Consultas de Stock: Si preguntan por un repuesto genérico (ej. "tienes bujías"), ACTÚA COMO EXPERTO y pregunta: Marca, Modelo y Año del vehículo.
-    - Conocimiento Técnico: Explica la importancia de los repuestos usando tu base de conocimiento, pero siempre referenciando la marca ONE4CARS.
-    - Almacenes: Almacén General = Bultos cerrados de China. Almacén Intermedio = Despacho inmediato al detal.
-
-    --- 4. REGLAS DE OPERACIÓN Y SEGURIDAD ---
-    - CERO INVENCIÓN: NO inventes precios. Si no tienes el dato, ofrece comunicar con un vendedor humano.
-    - FILTRO MAYORISTA: Si el cliente parece ser detal ("tienes una pieza para mi carro"), explica amablemente que ONE4CARS vende exclusivamente al mayor (Mínimo $100) y ofrece el link de registro para tiendas (opción 6).
-    - Asignación de Vendedores: Si alguien dice ser vendedor y da su cédula, indica que debes validar su identidad contra la base de datos interna (simulado).
-
-    INSTRUCCIONES DE RESPUESTA:
-    Responde al usuario basándote estrictamente en lo anterior. Sé amable, usa emojis (🚗, 📦, 🔧) y mantén la esencia venezolana.
     `;
 }
 
@@ -136,16 +114,25 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         
+        // --- CAPTURA DE NOMBRE ---
+        // 1. Intentamos obtener el nombre del perfil de WhatsApp
+        let nombreUsuario = msg.pushName || ""; 
+        
+        // (OPCIONAL) 2. Si quisieras buscar en BD, podrías hacer algo así:
+        // const usuarioBD = await cobranza.buscarUsuario(from); 
+        // if (usuarioBD) nombreUsuario = usuarioBD.nombre;
+
+        // Limpiamos el nombre para que no sea muy largo o tenga caracteres raros
+        nombreUsuario = nombreUsuario.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 20);
+
         if (text.length < 1) return;
 
         try {
             if (!apiKey) throw new Error("Key no configurada");
 
-            // Construimos el prompt dinámico con las tasas del día y las reglas
-            const systemInstructions = await construirInstrucciones();
+            // Le pasamos el nombre a la función constructora
+            const systemInstructions = await construirInstrucciones(nombreUsuario);
 
-            // Enviamos el contexto + el mensaje del cliente a Gemini
-            // Nota: En modelos chat, es ideal pasar systemInstructions como contexto inicial o setup
             const chat = model.startChat({
                 history: [
                     {
@@ -154,7 +141,7 @@ async function startBot() {
                     },
                     {
                         role: "model",
-                        parts: [{ text: "Entendido. Soy ONE4-Bot, listo para asistir con tono venezolano y experto en autopartes." }],
+                        parts: [{ text: `Entendido. Hablaré con ${nombreUsuario || "el cliente"} usando el tono de ONE4CARS.` }],
                     }
                 ],
                 generationConfig: {
@@ -169,29 +156,24 @@ async function startBot() {
 
         } catch (e) {
             console.error("Error en Gemini o API:", e);
-            // RESPUESTA MANUAL DE RESPALDO (FALLBACK)
-            // Actualizada con el tono y links solicitados por si falla la IA
-            const saludoError = "🚗 *ONE4-Bot:* Estimado cliente, disculpe, estoy actualizando mis sistemas. 🔧\n\nPero aquí le dejo nuestros accesos directos:\n\n";
+            const saludoError = `🚗 *ONE4-Bot:* Estimado ${nombreUsuario}, disculpe, estoy actualizando mis sistemas. 🔧\n\nAccesos directos:\n\n`;
             const menuFallback = `
 1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/
 2️⃣ *Edo. Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
 3️⃣ *Precios:* https://www.one4cars.com/lista_de_precios.php/
 4️⃣ *Pedidos:* https://www.one4cars.com/tomar_pedido.php/
 6️⃣ *Registro:* https://www.one4cars.com/afiliar_clientes.php/
-8️⃣ *Despacho:* https://www.one4cars.com/despacho.php/
-
-Estamos a su orden. Un asesor humano revisará su mensaje en breve.`;
+8️⃣ *Despacho:* https://www.one4cars.com/despacho.php/`;
             
             await sock.sendMessage(from, { text: saludoError + menuFallback });
         }
     });
 }
 
-// --- SERVIDOR WEB Y COBRANZA (MANTENIDO INTACTO) ---
+// --- SERVIDOR WEB Y COBRANZA ---
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
-    // HEADER PHP COMPLETO
     const header = `
         <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
@@ -308,8 +290,6 @@ const server = http.createServer(async (req, res) => {
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', () => { 
-            // Aquí se podría pasar la instancia de Gemini si fuera necesario para personalizar el cobro,
-            // pero mantenemos la lógica original de cobranza.ejecutarEnvioMasivo
             cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(b).facturas); 
             res.end("OK"); 
         });
@@ -332,7 +312,7 @@ const server = http.createServer(async (req, res) => {
                             }
                         </div>
                         <p class="text-muted small">Escanee el código para activar el servicio de ONE4CARS</p>
-                        <p class="text-primary fw-bold small">Bot Dinámico con IA + API Dólar Activo</p>
+                        <p class="text-primary fw-bold small">Bot Dinámico + IA + Reconocimiento de Nombre</p>
                         <hr>
                         <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2">IR AL PANEL DE COBRANZA</a>
                     </div>
