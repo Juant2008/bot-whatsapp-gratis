@@ -4,7 +4,7 @@ const qrcode = require('qrcode');
 const http = require('http');
 const https = require('https');
 const url = require('url');
-const fs = require('fs'); // Módulo para leer archivos
+const fs = require('fs');
 const path = require('path');
 const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -14,6 +14,7 @@ const cobranza = require('./cobranza');
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 
+// Usamos el modelo flash. Si 2.5 falla, prueba cambiar a "gemini-1.5-flash"
 const model = genAI.getGenerativeModel({ 
     model: "gemini-2.5-flash", 
     generationConfig: { 
@@ -26,7 +27,24 @@ let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-// --- FUNCIÓN AUXILIAR PARA CONSULTAR API DE DÓLAR ---
+// --- RESPALDO DE INSTRUCCIONES (Por si falla el archivo txt) ---
+const RESPALDO_INSTRUCCIONES = `
+ROL: Eres ONE4-Bot, asistente de ONE4CARS (Venezuela).
+TONO: Venezolano, amable, usa emojis (🚗, 📦).
+ENLACES:
+1. Pagos: https://www.one4cars.com/medios_de_pago.php/
+2. Edo Cuenta: https://www.one4cars.com/estado_de_cuenta.php/
+3. Precios: https://www.one4cars.com/lista_de_precios.php/
+4. Pedido: https://www.one4cars.com/tomar_pedido.php/
+5. Vendedores: https://www.one4cars.com/mis_clientes.php/
+6. Afiliar: https://www.one4cars.com/afiliar_clientes.php/
+7. Productos: https://www.one4cars.com/consulta_productos.php/
+8. Despacho: https://www.one4cars.com/despacho.php/
+9. Humano: Un asesor responderá pronto.
+REGLA: Si preguntan repuestos, pedir Marca, Modelo y Año. No inventar precios.
+`;
+
+// --- FUNCIÓN API DÓLAR ---
 function obtenerTasa(apiUrl) {
     return new Promise((resolve) => {
         https.get(apiUrl, (res) => {
@@ -36,46 +54,39 @@ function obtenerTasa(apiUrl) {
                 try {
                     const json = JSON.parse(data);
                     resolve(json.promedio || null);
-                } catch (e) {
-                    resolve(null);
-                }
+                } catch (e) { resolve(null); }
             });
         }).on('error', () => resolve(null));
     });
 }
 
-// --- GENERADOR DE PROMPT DINÁMICO (Cerebro Externo + Nombre) ---
+// --- CONSTRUCTOR DE CEREBRO ---
 async function construirInstrucciones(nombreCliente) {
-    // 1. Obtener tasas en tiempo real
     const tasaOficial = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
     const tasaParalelo = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/paralelo');
-
     const txtOficial = tasaOficial ? `Bs. ${tasaOficial}` : "No disponible";
     const txtParalelo = tasaParalelo ? `Bs. ${tasaParalelo}` : "No disponible";
     const fecha = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
 
-    // 2. Leer el archivo de texto externo (instrucciones.txt)
-    // Esto permite que edites el archivo sin reiniciar el bot
-    let baseConocimiento = "";
+    // Intenta leer el archivo, si falla, usa el respaldo
+    let baseConocimiento = RESPALDO_INSTRUCCIONES;
     try {
-        baseConocimiento = fs.readFileSync(path.join(__dirname, 'instrucciones.txt'), 'utf-8');
+        const rutaArchivo = path.join(__dirname, 'instrucciones.txt');
+        if (fs.existsSync(rutaArchivo)) {
+            baseConocimiento = fs.readFileSync(rutaArchivo, 'utf-8');
+        }
     } catch (err) {
-        console.error("Error leyendo instrucciones.txt, usando backup básico.");
-        baseConocimiento = "Eres un asistente de ONE4CARS. Ayuda al cliente.";
+        console.error("Alerta: No se pudo leer instrucciones.txt, usando respaldo interno.");
     }
 
-    // 3. Inyectar Datos Dinámicos al Prompt
     return `
     ${baseConocimiento}
 
-    --- DATOS DE CONTEXTO ACTUAL ---
-    FECHA Y HORA: ${fecha}
-    CLIENTE CON EL QUE HABLAS: ${nombreCliente || "Cliente Estimado"}
-    (Usa el nombre del cliente para personalizar el trato si es apropiado).
-
-    --- INDICADORES ECONÓMICOS AL INSTANTE ---
-    Dólar Oficial (BCV): ${txtOficial}
-    Dólar Paralelo: ${txtParalelo}
+    --- CONTEXTO ACTUAL ---
+    FECHA: ${fecha}
+    CLIENTE: ${nombreCliente} (Úsalo para saludar).
+    DÓLAR BCV: ${txtOficial}
+    DÓLAR PARALELO: ${txtParalelo}
     `;
 }
 
@@ -114,23 +125,15 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         
-        // --- CAPTURA DE NOMBRE ---
-        // 1. Intentamos obtener el nombre del perfil de WhatsApp
-        let nombreUsuario = msg.pushName || ""; 
-        
-        // (OPCIONAL) 2. Si quisieras buscar en BD, podrías hacer algo así:
-        // const usuarioBD = await cobranza.buscarUsuario(from); 
-        // if (usuarioBD) nombreUsuario = usuarioBD.nombre;
-
-        // Limpiamos el nombre para que no sea muy largo o tenga caracteres raros
+        // Limpieza de nombre
+        let nombreUsuario = msg.pushName || "Cliente";
         nombreUsuario = nombreUsuario.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 20);
 
         if (text.length < 1) return;
 
         try {
-            if (!apiKey) throw new Error("Key no configurada");
+            if (!apiKey) throw new Error("Falta GEMINI_API_KEY");
 
-            // Le pasamos el nombre a la función constructora
             const systemInstructions = await construirInstrucciones(nombreUsuario);
 
             const chat = model.startChat({
@@ -141,39 +144,44 @@ async function startBot() {
                     },
                     {
                         role: "model",
-                        parts: [{ text: `Entendido. Hablaré con ${nombreUsuario || "el cliente"} usando el tono de ONE4CARS.` }],
+                        parts: [{ text: `Entendido. Atenderé a ${nombreUsuario} con identidad ONE4CARS.` }],
                     }
                 ],
-                generationConfig: {
-                    maxOutputTokens: 800,
-                },
             });
 
             const result = await chat.sendMessage(text);
             const response = result.response.text();
-            
             await sock.sendMessage(from, { text: response });
 
         } catch (e) {
-            console.error("Error en Gemini o API:", e);
-            const saludoError = `🚗 *ONE4-Bot:* Estimado ${nombreUsuario}, disculpe, estoy actualizando mis sistemas. 🔧\n\nAccesos directos:\n\n`;
-            const menuFallback = `
-1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/
-2️⃣ *Edo. Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
-3️⃣ *Precios:* https://www.one4cars.com/lista_de_precios.php/
-4️⃣ *Pedidos:* https://www.one4cars.com/tomar_pedido.php/
-6️⃣ *Registro:* https://www.one4cars.com/afiliar_clientes.php/
-8️⃣ *Despacho:* https://www.one4cars.com/despacho.php/`;
+            console.error("ERROR EN IA:", e.message); // Mira esto en la consola si falla
             
-            await sock.sendMessage(from, { text: saludoError + menuFallback });
+            // --- RESPUESTA MANUAL DE SEGURIDAD (CON LAS 9 OPCIONES) ---
+            const saludoError = `🚗 *ONE4-Bot:* ¡Hola ${nombreUsuario}! 👋\nEstamos experimentando alta demanda en nuestros sistemas de IA, pero aquí tienes nuestro menú completo para ayudarte ya mismo:\n\n`;
+            
+            const menuCompleto = `
+1️⃣ *Medios de Pago:* https://www.one4cars.com/medios_de_pago.php/
+2️⃣ *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
+3️⃣ *Lista de Precios:* https://www.one4cars.com/lista_de_precios.php/
+4️⃣ *Tomar Pedido:* https://www.one4cars.com/tomar_pedido.php/
+5️⃣ *Mis Clientes/Vendedores:* https://www.one4cars.com/mis_clientes.php/
+6️⃣ *Afiliar Cliente:* https://www.one4cars.com/afiliar_clientes.php/
+7️⃣ *Consulta Productos:* https://www.one4cars.com/consulta_productos.php/
+8️⃣ *Seguimiento Despacho:* https://www.one4cars.com/despacho.php/
+9️⃣ *Asesor Humano:* Un operador revisará tu mensaje en breve.
+
+_Selecciona una opción o espera a un asesor._`;
+            
+            await sock.sendMessage(from, { text: saludoError + menuCompleto });
         }
     });
 }
 
-// --- SERVIDOR WEB Y COBRANZA ---
+// --- SERVIDOR WEB ---
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
+    // HEADER PHP COMPLETO
     const header = `
         <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
@@ -312,7 +320,7 @@ const server = http.createServer(async (req, res) => {
                             }
                         </div>
                         <p class="text-muted small">Escanee el código para activar el servicio de ONE4CARS</p>
-                        <p class="text-primary fw-bold small">Bot Dinámico + IA + Reconocimiento de Nombre</p>
+                        <p class="text-primary fw-bold small">Bot Dinámico + IA + Respaldo Activo</p>
                         <hr>
                         <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2">IR AL PANEL DE COBRANZA</a>
                     </div>
