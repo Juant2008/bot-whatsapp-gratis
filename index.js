@@ -11,12 +11,12 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
 // --- CONFIGURACIÓN DE IA ---
-const apiKey = process.env.GEMINI_API_KEY;
+const apiKey = process.env.GEMINI_API_KEY; // ¡ASEGÚRATE DE QUE ESTA VARIABLE EXISTA EN TU ENTORNO!
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// Usamos el modelo flash. Si 2.5 falla, prueba cambiar a "gemini-1.5-flash"
+// CAMBIO CRÍTICO: Usamos 'gemini-1.5-flash' para garantizar estabilidad.
 const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.5-flash", 
+    model: "gemini-1.5-flash", 
     generationConfig: { 
         temperature: 0.7, 
         maxOutputTokens: 1000 
@@ -27,7 +27,7 @@ let qrCodeData = "";
 let socketBot = null;
 const port = process.env.PORT || 10000;
 
-// --- RESPALDO DE INSTRUCCIONES (Por si falla el archivo txt) ---
+// --- RESPALDO DE INSTRUCCIONES ---
 const RESPALDO_INSTRUCCIONES = `
 ROL: Eres ONE4-Bot, asistente de ONE4CARS (Venezuela).
 TONO: Venezolano, amable, usa emojis (🚗, 📦).
@@ -41,7 +41,7 @@ ENLACES:
 7. Productos: https://www.one4cars.com/consulta_productos.php/
 8. Despacho: https://www.one4cars.com/despacho.php/
 9. Humano: Un asesor responderá pronto.
-REGLA: Si preguntan repuestos, pedir Marca, Modelo y Año. No inventar precios.
+REGLA: Si preguntan repuestos, pedir Marca, Modelo y Año.
 `;
 
 // --- FUNCIÓN API DÓLAR ---
@@ -68,25 +68,29 @@ async function construirInstrucciones(nombreCliente) {
     const txtParalelo = tasaParalelo ? `Bs. ${tasaParalelo}` : "No disponible";
     const fecha = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
 
-    // Intenta leer el archivo, si falla, usa el respaldo
     let baseConocimiento = RESPALDO_INSTRUCCIONES;
     try {
         const rutaArchivo = path.join(__dirname, 'instrucciones.txt');
         if (fs.existsSync(rutaArchivo)) {
             baseConocimiento = fs.readFileSync(rutaArchivo, 'utf-8');
+        } else {
+            console.log("AVISO: No se encontró instrucciones.txt, usando respaldo.");
         }
     } catch (err) {
-        console.error("Alerta: No se pudo leer instrucciones.txt, usando respaldo interno.");
+        console.error("Error leyendo archivo:", err.message);
     }
 
+    // SYSTEM PROMPT DURO
     return `
     ${baseConocimiento}
 
-    --- CONTEXTO ACTUAL ---
-    FECHA: ${fecha}
-    CLIENTE: ${nombreCliente} (Úsalo para saludar).
-    DÓLAR BCV: ${txtOficial}
-    DÓLAR PARALELO: ${txtParalelo}
+    --- CONTEXTO OBLIGATORIO ---
+    FECHA ACTUAL: ${fecha}
+    NOMBRE DEL CLIENTE: ${nombreCliente} (Debes usar este nombre para saludar).
+    PRECIO DOLAR BCV: ${txtOficial}
+    PRECIO DOLAR PARALELO: ${txtParalelo}
+    
+    INSTRUCCIÓN FINAL: No digas que eres una IA. Responde directamente como el asistente ONE4-Bot.
     `;
 }
 
@@ -125,17 +129,18 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         
-        // Limpieza de nombre
-        let nombreUsuario = msg.pushName || "Cliente";
-        nombreUsuario = nombreUsuario.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 20);
+        // Obtener nombre
+        let nombreUsuario = msg.pushName || "Estimado Cliente";
+        nombreUsuario = nombreUsuario.replace(/[^a-zA-Z0-9 ]/g, "").substring(0, 25);
 
         if (text.length < 1) return;
 
         try {
-            if (!apiKey) throw new Error("Falta GEMINI_API_KEY");
+            if (!apiKey) throw new Error("GEMINI_API_KEY no está configurada en las variables de entorno.");
 
             const systemInstructions = await construirInstrucciones(nombreUsuario);
 
+            // Chat Session
             const chat = model.startChat({
                 history: [
                     {
@@ -144,33 +149,32 @@ async function startBot() {
                     },
                     {
                         role: "model",
-                        parts: [{ text: `Entendido. Atenderé a ${nombreUsuario} con identidad ONE4CARS.` }],
+                        parts: [{ text: `Entendido. Hola ${nombreUsuario}, soy ONE4-Bot. Estoy listo para ayudar con repuestos y cobranza.` }],
                     }
                 ],
             });
 
             const result = await chat.sendMessage(text);
             const response = result.response.text();
+            
             await sock.sendMessage(from, { text: response });
 
         } catch (e) {
-            console.error("ERROR EN IA:", e.message); // Mira esto en la consola si falla
+            // AQUÍ IMPRIMIMOS EL ERROR REAL EN LA CONSOLA
+            console.error("🔴 FALLO CRÍTICO EN IA:", e.message); 
             
-            // --- RESPUESTA MANUAL DE SEGURIDAD (CON LAS 9 OPCIONES) ---
-            const saludoError = `🚗 *ONE4-Bot:* ¡Hola ${nombreUsuario}! 👋\nEstamos experimentando alta demanda en nuestros sistemas de IA, pero aquí tienes nuestro menú completo para ayudarte ya mismo:\n\n`;
-            
+            // Fallback Menu
+            const saludoError = `🚗 *ONE4-Bot:* Hola ${nombreUsuario} 👋. Estoy reiniciando mis sistemas neuronales 🧠, pero aquí tienes los accesos rápidos:\n\n`;
             const menuCompleto = `
-1️⃣ *Medios de Pago:* https://www.one4cars.com/medios_de_pago.php/
-2️⃣ *Estado de Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
-3️⃣ *Lista de Precios:* https://www.one4cars.com/lista_de_precios.php/
-4️⃣ *Tomar Pedido:* https://www.one4cars.com/tomar_pedido.php/
-5️⃣ *Mis Clientes/Vendedores:* https://www.one4cars.com/mis_clientes.php/
-6️⃣ *Afiliar Cliente:* https://www.one4cars.com/afiliar_clientes.php/
-7️⃣ *Consulta Productos:* https://www.one4cars.com/consulta_productos.php/
-8️⃣ *Seguimiento Despacho:* https://www.one4cars.com/despacho.php/
-9️⃣ *Asesor Humano:* Un operador revisará tu mensaje en breve.
-
-_Selecciona una opción o espera a un asesor._`;
+1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/
+2️⃣ *Edo. Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
+3️⃣ *Precios:* https://www.one4cars.com/lista_de_precios.php/
+4️⃣ *Pedidos:* https://www.one4cars.com/tomar_pedido.php/
+5️⃣ *Mis Clientes:* https://www.one4cars.com/mis_clientes.php/
+6️⃣ *Registro:* https://www.one4cars.com/afiliar_clientes.php/
+7️⃣ *Productos:* https://www.one4cars.com/consulta_productos.php/
+8️⃣ *Despacho:* https://www.one4cars.com/despacho.php/
+9️⃣ *Asesor:* Un humano te atenderá pronto.`;
             
             await sock.sendMessage(from, { text: saludoError + menuCompleto });
         }
@@ -181,7 +185,7 @@ _Selecciona una opción o espera a un asesor._`;
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
-    // HEADER PHP COMPLETO
+    // HEADER PHP
     const header = `
         <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
@@ -320,7 +324,7 @@ const server = http.createServer(async (req, res) => {
                             }
                         </div>
                         <p class="text-muted small">Escanee el código para activar el servicio de ONE4CARS</p>
-                        <p class="text-primary fw-bold small">Bot Dinámico + IA + Respaldo Activo</p>
+                        <p class="text-primary fw-bold small">Bot IA (v1.5-Flash) + Dólar API + Cobranza</p>
                         <hr>
                         <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2">IR AL PANEL DE COBRANZA</a>
                     </div>
