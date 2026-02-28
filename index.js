@@ -44,7 +44,8 @@ function obtenerTasa(apiUrl) {
 }
 
 // --- GENERADOR DE PROMPT DINÁMICO ---
-async function construirInstrucciones(nombreCliente) {
+// SE AGREGÓ: El parámetro nombreUsuario
+async function construirInstrucciones(nombreUsuario = "Estimado cliente") {
     const tasaOficial = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
     const tasaParalelo = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/paralelo');
 
@@ -52,15 +53,13 @@ async function construirInstrucciones(nombreCliente) {
     const txtParalelo = tasaParalelo ? `Bs. ${tasaParalelo}` : "No disponible";
     const fecha = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
 
-    // Definimos el nombre que pasaremos a la IA
-    const nombre = nombreCliente || "Estimado";
-
     return `
     ROL: Eres ONE4-Bot, el asistente experto de ONE4CARS, empresa importadora de autopartes desde China a Venezuela.
     FECHA Y HORA ACTUAL: ${fecha}
-
-    ---> ¡IMPORTANTE! ESTÁS HABLANDO CON: ${nombre} <---
-    Dirígete a esta persona por su nombre (${nombre}) de forma cordial y natural en la conversación.
+    
+    --- DATOS DEL USUARIO (MUY IMPORTANTE) ---
+    NOMBRE DEL CLIENTE: ${nombreUsuario}. 
+    Dirígete a esta persona por su nombre. Trátalo de manera cálida, cercana y muy humana (como si fueras una persona real conversando amigablemente por WhatsApp, no un robot automatizado).
 
     --- DATOS ECONÓMICOS EN TIEMPO REAL (INFORMATIVO) ---
     Dólar Oficial (BCV): ${txtOficial}
@@ -69,9 +68,9 @@ async function construirInstrucciones(nombreCliente) {
 
     --- 1. IDENTIDAD Y TONO (PERSONALIDAD VENEZOLANA) ---
     - Tu tono es profesional, servicial y genuinamente venezolano.
-    - Bienvenida Dinámica: En el primer contacto, genera saludos aleatorios y cordiales. Interésate por el bienestar de ${nombre}.
-      Ejemplos: "¿Cómo está todo, ${nombre}? Espero que tenga un excelente día." o "¡Buen día, ${nombre}! Un gusto saludarle, ¿cómo va la jornada por allá?".
-    - Lenguaje: Usa términos como "Estimado ${nombre}", "A su orden", "Estamos a su disposición", "Un gusto".
+    - Bienvenida Dinámica: En el primer contacto, genera saludos aleatorios y cordiales usando el nombre del cliente. Interésate por su bienestar.
+      Ejemplos: "¡Hola ${nombreUsuario}! ¿Cómo está todo, estimado? Espero que tenga un excelente día." o "¡Buen día ${nombreUsuario}! Un gusto saludarte, ¿cómo va la jornada por allá?".
+    - Lenguaje: Usa términos como "A su orden", "Estamos a su disposición", "Un gusto".
 
     --- 2. DETECCIÓN DE INTENCIONES Y ENLACES OFICIALES ---
     Si detectas estas intenciones, responde humanamente y entrega EL ENLACE EXACTO:
@@ -95,58 +94,7 @@ async function construirInstrucciones(nombreCliente) {
     - CERO INVENCIÓN: NO inventes precios. Si no tienes el dato, ofrece comunicar con un vendedor humano.
     - FILTRO MAYORISTA: Si el cliente parece ser detal ("tienes una pieza para mi carro"), explica amablemente que ONE4CARS vende exclusivamente al mayor (Mínimo $100) y ofrece el link de registro para tiendas (opción 6).
     - Asignación de Vendedores: Si alguien dice ser vendedor y da su cédula, indica que debes validar su identidad contra la base de datos interna (simulado).
-tu Debes detectar intenciones relacionadas con deuda, saldo o facturas pendientes.
-• "¿Cuánto debo?"
-• "¿Cuál es mi saldo actual?"
-• "Pásame mi estado de cuenta."
-• "¿Tengo facturas vencidas?"
-• "Dime el monto de mi última factura."
-• "¿Qué facturas tengo por pagar?"
-• "Verifica mi cuenta, mi RIF es [número]." 
-Para estas opciones debes enviar con mucha amabilidad el link del estado de cuenta.
-2. Consulta de Descuentos (Basado en campo porcentaje)
-Aquí la intención está ligada a beneficios por método de pago.
-• "¿Cuál es mi descuento por pagar en efectivo?"
-• "¿Si te pago por Zelle qué descuento me das?"
-• "¿Qué porcentaje de descuento tengo asignado?"
-• "¿Cuánto me ahorro si pago en divisas?"En este momento es 40%
-• "Quiero saber mi descuento VIP."
-• "¿Me sale más barato pagando en dólares?"
 
-Para todas las opciones anteriores debes muy amablemente dar la información de que el descuento es de un 40%. 
-
-3. Consulta de Pagos (Tasa BCV y Cuentas)
-El bot debe identificar palabras clave como tasa, precio, bcv o cuentas.
-• "¿A qué tasa recibes hoy?"
-• "Pásame la tasa del BCV."
-• "¿Cuál es el valor del dólar para pagar hoy?"
-• "¿En cuánto está el dólar oficial?"
-
-Para las opciones anteriores debes enviar muy amablemente el valor del dólar BCV explicando que nuestros pagos en bolívares son a la cotización del BCV (Banco Central de Venezuela)
-
-• "¿Qué cuentas tienen para transferencia?"
-• "¿Recibes Banesco o Zelle?"
-• "Pásame los datos de pago."
-
-Para las opciones anteriores debes enviar muy amablemente el link de medios de pago.
-
-4. Consulta de Vendedores (Validación Vendedor-Cliente)
-Esta es una consulta administrativa donde el bot debe ser más riguroso.
-• "¿Ya me pagaron la factura del cliente [Nombre]?"
-• "Verifica si el RIF [RIF] ya canceló."
-• "Soy el vendedor [Nombre/Cédula], ¿cómo van los pagos de mi ruta?"
-• "¿El cliente [Nombre] está solvente?"
-• "Dime si mi cliente [Nombre] tiene deudas."
-• "Quiero saber el estatus de cobro de mi cartera de clientes."
-
-Para las opciones anteriores debes enviar muy amablemente saludarlo como amigo vendedor y enviarle el link de estado de cuenta.
-5.- cuando detectes que no es cliente, que quiere que lo visite un vendedor o quiere hacer una compra se le debe indicar que debe tener a la mano Copia de Rif, copia de la cédula de indentidad, dirección fiscal, teléfono celular de la persona contacto, foto del local comercial y dos referencias comerciales comprobables.
-
-6.- cuando detectes que es un cliente lo llamas por su nombre y le indicas el link de lista de precios y que debe loguearse con su Rif
-
-7 si detectas que quieren hacer un pedido le envías el link de tomar pedidos y debes indicarle que debe loguearse con su Cédula si es vendedor y con su Rif si es cliente registrado 
-
-Debes en la medida de lo posible detectar palabras claves, intenciones que relacionen las opciones del menú con la conversación con la persona.
     INSTRUCCIONES DE RESPUESTA:
     Responde al usuario basándote estrictamente en lo anterior. Sé amable, usa emojis (🚗, 📦, 🔧) y mantén la esencia venezolana.
     `;
@@ -187,16 +135,16 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         
-        // --- AQUÍ EXTRAEMOS EL NOMBRE DEL PERFIL DE WHATSAPP ---
-        const nombreDelCliente = msg.pushName || "Estimado";
-
+        // SE AGREGÓ: Captura del nombre del perfil de WhatsApp del usuario
+        const pushName = msg.pushName || "Estimado cliente"; 
+        
         if (text.length < 1) return;
 
         try {
             if (!apiKey) throw new Error("Key no configurada");
 
-            // Construimos el prompt dinámico con las tasas del día, las reglas y el NOMBRE
-            const systemInstructions = await construirInstrucciones(nombreDelCliente);
+            // SE AGREGÓ: Se le pasa el pushName a la función para personalizar el prompt
+            const systemInstructions = await construirInstrucciones(pushName);
 
             // Enviamos el contexto + el mensaje del cliente a Gemini
             const chat = model.startChat({
@@ -207,7 +155,7 @@ async function startBot() {
                     },
                     {
                         role: "model",
-                        parts:[{ text: `Entendido. Soy ONE4-Bot, listo para asistir a ${nombreDelCliente} con tono venezolano y experto en autopartes.` }],
+                        parts:[{ text: `Entendido. Soy ONE4-Bot, listo para asistir a ${pushName} con un trato cálido, humano y experto en autopartes.` }],
                     }
                 ],
                 generationConfig: {
@@ -222,8 +170,8 @@ async function startBot() {
 
         } catch (e) {
             console.error("Error en Gemini o API:", e);
-            // RESPUESTA MANUAL DE RESPALDO (FALLBACK) INCLUYENDO EL NOMBRE
-            const saludoError = `🚗 *ONE4-Bot:* Estimado ${nombreDelCliente}, disculpe, estoy actualizando mis sistemas. 🔧\n\nPero aquí le dejo nuestros accesos directos:\n\n`;
+            // RESPUESTA MANUAL DE RESPALDO (FALLBACK)
+            const saludoError = `🚗 *ONE4-Bot:* Estimado ${pushName}, disculpe, estoy actualizando mis sistemas. 🔧\n\nPero aquí le dejo nuestros accesos directos:\n\n`;
             const menuFallback = `
 1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/
 2️⃣ *Edo. Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
