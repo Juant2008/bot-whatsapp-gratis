@@ -1,4 +1,5 @@
-require('dotenv').config(); // <-- CORRECCIÓN 1: Necesario para que process.env funcione
+index.js
+
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
@@ -9,13 +10,13 @@ const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN DE IA (Actualizado) ---
+// --- CONFIGURACIÓN DE IA (Actualizado para ONE4CARS 2026) ---
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 
 // Configuración del modelo:
 const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash", // <-- CORRECCIÓN 2: El modelo real soportado por la API
+    model: "gemini-2.5-flash", 
     generationConfig: { 
         temperature: 0.7, 
         maxOutputTokens: 1000 
@@ -45,7 +46,7 @@ function obtenerTasa(apiUrl) {
 }
 
 // --- GENERADOR DE PROMPT DINÁMICO ---
-async function construirInstrucciones(nombreUsuario = "Estimado cliente") {
+async function construirInstrucciones() {
     const tasaOficial = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
     const tasaParalelo = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/paralelo');
 
@@ -56,10 +57,6 @@ async function construirInstrucciones(nombreUsuario = "Estimado cliente") {
     return `
     ROL: Eres ONE4-Bot, el asistente experto de ONE4CARS, empresa importadora de autopartes desde China a Venezuela.
     FECHA Y HORA ACTUAL: ${fecha}
-    
-    --- DATOS DEL USUARIO (MUY IMPORTANTE) ---
-    NOMBRE DEL CLIENTE: ${nombreUsuario}. 
-    Dirígete a esta persona por su nombre. Trátalo de manera cálida, cercana y muy humana (como si fueras una persona real conversando amigablemente por WhatsApp, no un robot automatizado).
 
     --- DATOS ECONÓMICOS EN TIEMPO REAL (INFORMATIVO) ---
     Dólar Oficial (BCV): ${txtOficial}
@@ -68,9 +65,9 @@ async function construirInstrucciones(nombreUsuario = "Estimado cliente") {
 
     --- 1. IDENTIDAD Y TONO (PERSONALIDAD VENEZOLANA) ---
     - Tu tono es profesional, servicial y genuinamente venezolano.
-    - Bienvenida Dinámica: En el primer contacto, genera saludos aleatorios y cordiales usando el nombre del cliente. Interésate por su bienestar.
-      Ejemplos: "¡Hola ${nombreUsuario}! ¿Cómo está todo, estimado? Espero que tenga un excelente día." o "¡Buen día ${nombreUsuario}! Un gusto saludarte, ¿cómo va la jornada por allá?".
-    - Lenguaje: Usa términos como "A su orden", "Estamos a su disposición", "Un gusto".
+    - Bienvenida Dinámica: En el primer contacto, genera saludos aleatorios y cordiales. Interésate por el bienestar del cliente.
+      Ejemplos: "¿Cómo está todo, estimado? Espero que tenga un excelente día." o "¡Buen día! Un gusto saludarle, ¿cómo va la jornada por allá?".
+    - Lenguaje: Usa términos como "Estimado cliente", "A su orden", "Estamos a su disposición", "Un gusto".
 
     --- 2. DETECCIÓN DE INTENCIONES Y ENLACES OFICIALES ---
     Si detectas estas intenciones, responde humanamente y entrega EL ENLACE EXACTO:
@@ -108,7 +105,7 @@ async function startBot() {
         version, 
         auth: state, 
         logger: pino({ level: 'silent' }), 
-        browser:["ONE4CARS", "Chrome", "1.0.0"]
+        browser: ["ONE4CARS", "Chrome", "1.0.0"]
     });
 
     socketBot = sock;
@@ -135,24 +132,24 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         
-        const pushName = msg.pushName || "Estimado cliente"; 
-        
         if (text.length < 1) return;
 
         try {
             if (!apiKey) throw new Error("Key no configurada");
 
-            const systemInstructions = await construirInstrucciones(pushName);
+            // Construimos el prompt dinámico con las tasas del día y las reglas
+            const systemInstructions = await construirInstrucciones();
 
+            // Enviamos el contexto + el mensaje del cliente a Gemini
             const chat = model.startChat({
-                history:[
+                history: [
                     {
                         role: "user",
-                        parts:[{ text: systemInstructions }],
+                        parts: [{ text: systemInstructions }],
                     },
                     {
                         role: "model",
-                        parts:[{ text: `Entendido. Soy ONE4-Bot, listo para asistir a ${pushName} con un trato cálido, humano y experto en autopartes.` }],
+                        parts: [{ text: "Entendido. Soy ONE4-Bot, listo para asistir con tono venezolano y experto en autopartes." }],
                     }
                 ],
                 generationConfig: {
@@ -168,7 +165,7 @@ async function startBot() {
         } catch (e) {
             console.error("Error en Gemini o API:", e);
             // RESPUESTA MANUAL DE RESPALDO (FALLBACK)
-            const saludoError = `🚗 *ONE4-Bot:* Estimado ${pushName}, disculpe, estoy actualizando mis sistemas. 🔧\n\nPero aquí le dejo nuestros accesos directos:\n\n`;
+            const saludoError = "🚗 *ONE4-Bot:* Estimado cliente, disculpe, estoy actualizando mis sistemas. 🔧\n\nPero aquí le dejo nuestros accesos directos:\n\n";
             const menuFallback = `
 1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/
 2️⃣ *Edo. Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
@@ -189,7 +186,7 @@ const server = http.createServer(async (req, res) => {
     
     // HEADER PHP COMPLETO
     const header = `
-        <header class="p-3 mb-4 border-bottom bg-dark text<header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
+        <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center">
                     <h4 class="m-0 text-primary fw-bold">🚗 ONE4CARS</h4>
