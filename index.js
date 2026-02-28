@@ -1,3 +1,4 @@
+require('dotenv').config(); // <-- CORRECCIÓN 1: Necesario para que process.env funcione
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
@@ -8,13 +9,13 @@ const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN DE IA (Actualizado para ONE4CARS 2026) ---
+// --- CONFIGURACIÓN DE IA (Actualizado) ---
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 
 // Configuración del modelo:
 const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.5-flash", 
+    model: "gemini-1.5-flash", // <-- CORRECCIÓN 2: El modelo real soportado por la API
     generationConfig: { 
         temperature: 0.7, 
         maxOutputTokens: 1000 
@@ -44,7 +45,6 @@ function obtenerTasa(apiUrl) {
 }
 
 // --- GENERADOR DE PROMPT DINÁMICO ---
-// SE AGREGÓ: El parámetro nombreUsuario
 async function construirInstrucciones(nombreUsuario = "Estimado cliente") {
     const tasaOficial = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
     const tasaParalelo = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/paralelo');
@@ -135,7 +135,6 @@ async function startBot() {
         const from = msg.key.remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         
-        // SE AGREGÓ: Captura del nombre del perfil de WhatsApp del usuario
         const pushName = msg.pushName || "Estimado cliente"; 
         
         if (text.length < 1) return;
@@ -143,15 +142,13 @@ async function startBot() {
         try {
             if (!apiKey) throw new Error("Key no configurada");
 
-            // SE AGREGÓ: Se le pasa el pushName a la función para personalizar el prompt
             const systemInstructions = await construirInstrucciones(pushName);
 
-            // Enviamos el contexto + el mensaje del cliente a Gemini
             const chat = model.startChat({
                 history:[
                     {
                         role: "user",
-                        parts: [{ text: systemInstructions }],
+                        parts:[{ text: systemInstructions }],
                     },
                     {
                         role: "model",
@@ -192,7 +189,7 @@ const server = http.createServer(async (req, res) => {
     
     // HEADER PHP COMPLETO
     const header = `
-        <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
+        <header class="p-3 mb-4 border-bottom bg-dark text<header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center">
                     <h4 class="m-0 text-primary fw-bold">🚗 ONE4CARS</h4>
