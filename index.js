@@ -1,27 +1,29 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion
+} = require('@whiskeysockets/baileys');
+
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
 const https = require('https');
 const url = require('url');
 const pino = require('pino');
-const fs = require('fs');
 const mysql = require('mysql2/promise');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
 // ===== CONFIG =====
-const apiKey = process.env.GEMINI_API_KEY;
-const genAI = new GoogleGenerativeAI(apiKey);
-
-const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.5-flash",
-    generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-});
-
 const PORT = process.env.PORT || 10000;
+const apiKey = process.env.GEMINI_API_KEY;
 
-// ===== DB (MISMA QUE COBRANZA) =====
+// ===== IA =====
+const genAI = new GoogleGenerativeAI(apiKey);
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+// ===== DB =====
 const dbConfig = {
     host: 'one4cars.com',
     user: 'juant200_one4car',
@@ -33,7 +35,6 @@ async function db() {
     return await mysql.createConnection(dbConfig);
 }
 
-// ===== CONTROL HUMANO =====
 async function getSesion(tel) {
     const conn = await db();
     const [r] = await conn.execute("SELECT * FROM control_chat WHERE telefono=?", [tel]);
@@ -52,19 +53,19 @@ async function setModo(tel, modo) {
 }
 
 // ===== VARIABLES =====
+let sock = null;
 let qrCodeData = "Iniciando...";
-let socketBot = null;
+let isConnecting = false;
 
 // ===== API DOLAR =====
 function obtenerTasa(apiUrl) {
     return new Promise((resolve) => {
         https.get(apiUrl, (res) => {
             let data = '';
-            res.on('data', (chunk) => data += chunk);
+            res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 try {
-                    const json = JSON.parse(data);
-                    resolve(json.promedio || null);
+                    resolve(JSON.parse(data).promedio || null);
                 } catch {
                     resolve(null);
                 }
@@ -73,103 +74,123 @@ function obtenerTasa(apiUrl) {
     });
 }
 
-// ===== PROMPT IA =====
 async function construirInstrucciones() {
-    const tasaOficial = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
-    const tasaParalelo = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/paralelo');
-
-    return `Eres ONE4-Bot experto en autopartes...`; // (puedes dejar tu prompt completo aquí igual)
+    const tasa = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
+    return `Eres ONE4-Bot. Dólar BCV: ${tasa || 'No disponible'}`;
 }
 
 // ===== BOT =====
 async function startBot() {
 
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    const { version } = await fetchLatestBaileysVersion();
+    if (isConnecting) return;
+    isConnecting = true;
 
-    const sock = makeWASocket({
-        version,
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        browser: ["ONE4CARS", "Chrome", "1.0.0"]
-    });
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+        const { version } = await fetchLatestBaileysVersion();
 
-    socketBot = sock;
+        sock = makeWASocket({
+            version,
+            auth: state,
+            logger: pino({ level: 'silent' }),
+            browser: ["Ubuntu", "Chrome", "22.04.4"]
+        });
 
-    sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (u) => {
-        const { connection, lastDisconnect, qr } = u;
+        sock.ev.on('connection.update', async (u) => {
 
-        if (qr) qrcode.toDataURL(qr, (_, url) => qrCodeData = url);
+            const { connection, lastDisconnect, qr } = u;
 
-        if (connection === 'open') {
-            qrCodeData = "ONLINE ✅";
-            console.log("CONECTADO");
-        }
+            if (qr) {
+                qrcode.toDataURL(qr, (_, url) => {
+                    qrCodeData = url;
+                });
+            }
 
-        if (connection === 'close') {
-            const shouldReconnect =
-                (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (connection === 'open') {
+                console.log("✅ CONECTADO A WHATSAPP");
+                qrCodeData = "ONLINE ✅";
+                isConnecting = false;
+            }
 
-            if (shouldReconnect) setTimeout(startBot, 5000);
-        }
-    });
+            if (connection === 'close') {
 
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                const code = (lastDisconnect?.error instanceof Boom)
+                    ? lastDisconnect.error.output.statusCode
+                    : 0;
 
-        if (type !== 'notify') return;
+                console.log("❌ Conexión cerrada. Código:", code);
 
-        const msg = messages[0];
-        if (!msg.message) return;
+                isConnecting = false;
 
-        const from = msg.key.remoteJid;
-        if (from.includes('@g.us')) return;
+                // 🔥 SI SE DESLOGEA → BORRAR SESIÓN
+                if (code === DisconnectReason.loggedOut) {
+                    console.log("⚠️ Sesión cerrada, eliminando auth_info");
+                    require('fs').rmSync('auth_info', { recursive: true, force: true });
+                }
 
-        const tel = from.split('@')[0];
+                setTimeout(startBot, 8000);
+            }
+        });
 
-        // 🔥 SI ES TUYO → ACTIVAR MODO HUMANO
-        if (msg.key.fromMe) {
-            await setModo(tel, 'humano');
-            return;
-        }
+        // ===== MENSAJES =====
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
 
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
-        if (!text) return;
+            if (type !== 'notify') return;
 
-        // 🔥 VALIDAR MODO
-        const sesion = await getSesion(tel);
+            const msg = messages[0];
+            if (!msg.message) return;
 
-        if (sesion && sesion.modo === 'humano') {
-            console.log("PAUSADO (modo humano):", tel);
-            return;
-        }
+            const from = msg.key.remoteJid;
+            if (from.includes('@g.us')) return;
 
-        try {
-            if (!apiKey) throw new Error("Sin API KEY");
+            const tel = from.split('@')[0];
 
-            const instrucciones = await construirInstrucciones();
+            // 🔥 HUMANO
+            if (msg.key.fromMe) {
+                await setModo(tel, 'humano');
+                return;
+            }
 
-            const chat = model.startChat({
-                history: [
-                    { role: "user", parts: [{ text: instrucciones }] }
-                ]
-            });
+            const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+            if (!text) return;
 
-            const r = await chat.sendMessage(text);
+            const sesion = await getSesion(tel);
 
-            await sock.sendMessage(from, {
-                text: r.response.text()
-            });
+            if (sesion && sesion.modo === 'humano') {
+                console.log("⛔ BOT PAUSADO:", tel);
+                return;
+            }
 
-        } catch (e) {
-            console.error(e);
+            try {
+                const instrucciones = await construirInstrucciones();
 
-            await sock.sendMessage(from, {
-                text: "⚠️ Sistema en mantenimiento, use el menú."
-            });
-        }
-    });
+                const chat = model.startChat({
+                    history: [{ role: "user", parts: [{ text: instrucciones }] }]
+                });
+
+                const r = await chat.sendMessage(text);
+
+                await sock.sendMessage(from, {
+                    text: r.response.text()
+                });
+
+            } catch (e) {
+                console.error("Error IA:", e);
+
+                await sock.sendMessage(from, {
+                    text: "⚠️ Sistema en mantenimiento"
+                });
+            }
+
+        });
+
+    } catch (e) {
+        console.error("🔥 Error general:", e);
+        isConnecting = false;
+        setTimeout(startBot, 10000);
+    }
 }
 
 // ===== SERVER =====
@@ -177,46 +198,27 @@ const server = http.createServer(async (req, res) => {
 
     const parsed = url.parse(req.url, true);
 
-    if (parsed.pathname === '/cobranza') {
-
-        try {
-            const v = await cobranza.obtenerVendedores();
-            const z = await cobranza.obtenerZonas();
-            const d = await cobranza.obtenerListaDeudores(parsed.query);
-
-            res.end("Panel OK"); // puedes mantener tu HTML original aquí
-
-        } catch (e) {
-            res.end("Error: " + e.message);
-        }
-
-        return;
-    }
-
     if (parsed.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let body = '';
-        req.on('data', chunk => body += chunk);
-
+        req.on('data', c => body += c);
         req.on('end', () => {
-            cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(body).facturas);
+            cobranza.ejecutarEnvioMasivo(sock, JSON.parse(body).facturas);
             res.end("OK");
         });
-
         return;
     }
 
     res.end(`
         <h2>ONE4CARS BOT</h2>
-        ${qrCodeData.startsWith('data') 
+        ${qrCodeData.startsWith('data')
             ? `<img src="${qrCodeData}" width="250">`
             : `<h3>${qrCodeData}</h3>`
         }
-        <br><a href="/cobranza">Cobranza</a>
     `);
 });
 
 // ===== START =====
-server.listen(PORT, () => {
-    console.log("Servidor en puerto", PORT);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log("🚀 Servidor activo en puerto", PORT);
     startBot();
 });
