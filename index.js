@@ -9,7 +9,7 @@ const pino = require('pino');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
-// --- CONFIGURACIÓN DE IA (ONE4CARS 2026) ---
+// --- CONFIGURACIÓN IA ---
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({ 
@@ -22,8 +22,7 @@ let socketBot = null;
 const port = process.env.PORT || 10000;
 
 // --- CONTROL HUMANO ---
-global.controlManual = {}; // Chats donde un humano tomó control
-
+global.controlManual = {};
 function activarControlManual(jid) { global.controlManual[jid] = true; }
 function desactivarControlManual(jid) { delete global.controlManual[jid]; }
 
@@ -34,7 +33,7 @@ function obtenerTasa(apiUrl) {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                try { const json = JSON.parse(data); resolve(json.promedio || null); }
+                try { resolve(JSON.parse(data).promedio || null); }
                 catch { resolve(null); }
             });
         }).on('error', () => resolve(null));
@@ -44,125 +43,128 @@ function obtenerTasa(apiUrl) {
 async function construirInstrucciones() {
     const tasaOficial = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
     const tasaParalelo = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/paralelo');
-
     const txtOficial = tasaOficial ? `Bs. ${tasaOficial}` : "No disponible";
     const txtParalelo = tasaParalelo ? `Bs. ${tasaParalelo}` : "No disponible";
     const fecha = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
 
     return `
-ROL: Eres ONE4-Bot, asistente experto de ONE4CARS, importadora de autopartes de China a Venezuela.
-FECHA Y HORA ACTUAL: ${fecha}
+ROL: Eres ONE4-Bot, asistente experto de ONE4CARS.
+FECHA: ${fecha}
 
---- DATOS ECONÓMICOS EN TIEMPO REAL ---
-Dólar Oficial (BCV): ${txtOficial}
-Dólar Paralelo: ${txtParalelo}
+--- DÓLARES ---
+Oficial: ${txtOficial}
+Paralelo: ${txtParalelo}
 
---- 1. IDENTIDAD Y TONO ---
-- Tono profesional, servicial y venezolano.
-- Bienvenida cordial aleatoria.
-- Lenguaje formal: "Estimado cliente", "A su orden", "Un gusto".
+--- IDENTIDAD ---
+Tono profesional y venezolano, saludo cordial, lenguaje formal.
 
---- 2. ENLACES OFICIALES ---
-Medios de pago -> https://www.one4cars.com/medios_de_pago.php/
-Estado de cuenta -> https://www.one4cars.com/estado_de_cuenta.php/
-Lista de precios -> https://www.one4cars.com/lista_de_precios.php/
-Tomar pedido -> https://www.one4cars.com/tomar_pedido.php/
-Mis clientes/Vendedores -> https://www.one4cars.com/mis_clientes.php/
-Afiliar cliente -> https://www.one4cars.com/afiliar_clientes.php/
-Consulta de productos -> https://www.one4cars.com/consulta_productos.php/
-Seguimiento Despacho -> https://www.one4cars.com/despacho.php/
-Asesor Humano -> Un operador revisará el caso.
+--- ENLACES OFICIALES ---
+1. Pagos: https://www.one4cars.com/medios_de_pago.php/
+2. Estado de cuenta: https://www.one4cars.com/estado_de_cuenta.php/
+3. Lista de precios: https://www.one4cars.com/lista_de_precios.php/
+4. Tomar pedido: https://www.one4cars.com/tomar_pedido.php/
+5. Mis clientes/Vendedores: https://www.one4cars.com/mis_clientes.php/
+6. Afiliar cliente: https://www.one4cars.com/afiliar_clientes.php/
+7. Consulta de productos: https://www.one4cars.com/consulta_productos.php/
+8. Seguimiento Despacho: https://www.one4cars.com/despacho.php/
+9. Asesor humano: operador revisará el caso.
 
---- 3. PAUTAS EXPERTO ---
-- Validación de identidad antes de dar información privada.
-- Consultas de stock: pedir Marca, Modelo y Año.
-- Explica importancia de repuestos usando ONE4CARS.
-- Almacenes: General = Bultos de China, Intermedio = Despacho inmediato.
-
---- 4. REGLAS ---
-- No inventar precios.
-- Explicar venta al mayor si el cliente es detal.
-- Asignación de vendedores: validar identidad en la base interna.
-
-Responde solo basándote en lo anterior, usa emojis 🚗 📦 🔧, tono venezolano, profesional y de empresa.
+--- PAUTAS ---
+Validación de identidad antes de dar info privada.
+Consultas de stock: pedir Marca, Modelo, Año.
+Almacenes: General = bultos China, Intermedio = despacho inmediato.
+Cero invención: si no tienes datos, redirige a humano.
 `;
 }
 
 // --- INICIALIZAR BOT ---
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-    const { version } = await fetchLatestBaileysVersion();
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+        const { version } = await fetchLatestBaileysVersion();
 
-    const sock = makeWASocket({ 
-        version, auth: state, logger: pino({ level: 'silent' }), browser: ["ONE4CARS", "Chrome", "1.0.0"]
-    });
+        const sock = makeWASocket({ 
+            version, auth: state, logger: pino({ level: 'silent' }), browser: ["ONE4CARS", "Chrome", "1.0.0"]
+        });
 
-    socketBot = sock;
-    sock.ev.on('creds.update', saveCreds);
+        socketBot = sock;
+        sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (u) => {
-        const { connection, lastDisconnect, qr } = u;
-        if (qr) qrcode.toDataURL(qr, (err, url) => qrCodeData = url);
-        if (connection === 'open') qrCodeData = "ONLINE ✅";
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(startBot, 5000);
-        }
-    });
+        // --- CONEXIÓN ---
+        sock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            if (qr) qrcode.toDataURL(qr, (err, url) => qrCodeData = url);
 
-    // --- EVENTO DE MENSAJES ---
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+            if (connection === 'open') qrCodeData = "ONLINE ✅";
 
-        const from = msg.key.remoteJid;
-        const isGroup = from.endsWith('@g.us');
+            if (connection === 'close') {
+                const reason = (lastDisconnect.error instanceof Boom) ? lastDisconnect.error.output.statusCode : null;
+                console.log("Desconectado. Razón:", reason);
 
-        if (isGroup) return; // NO RESPONDER EN GRUPOS
-        if (global.controlManual[from]) return; // NO RESPONDER SI HUMANO CONTROL
+                if (reason !== DisconnectReason.loggedOut) {
+                    console.log("Intentando reconectar en 5s...");
+                    setTimeout(() => startBot(), 5000);
+                } else {
+                    console.log("Sesión cerrada, necesita reescaneo QR.");
+                    qrCodeData = "";
+                }
+            }
+        });
 
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
-        if (!text) return;
+        // --- MENSAJES ---
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type !== 'notify') return;
+            const msg = messages[0];
+            if (!msg.message || msg.key.fromMe) return;
 
-        try {
-            if (!apiKey) throw new Error("Key no configurada");
-            const systemInstructions = await construirInstrucciones();
+            const from = msg.key.remoteJid;
+            const isGroup = from.endsWith('@g.us');
+            if (isGroup) return; // NO RESPONDER EN GRUPOS
+            if (global.controlManual[from]) return; // NO RESPONDER SI HUMANO
 
-            const chat = model.startChat({
-                history: [
-                    { role: "user", parts: [{ text: systemInstructions }] },
-                    { role: "model", parts: [{ text: "Entendido. Soy ONE4-Bot, listo para asistir con tono venezolano y experto en autopartes." }] }
-                ],
-                generationConfig: { maxOutputTokens: 800 }
-            });
+            const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+            if (!text) return;
 
-            const result = await chat.sendMessage(text);
-            const response = result.response.text();
-            await sock.sendMessage(from, { text: response });
+            try {
+                if (!apiKey) throw new Error("Key no configurada");
+                const systemInstructions = await construirInstrucciones();
 
-        } catch (e) {
-            console.error("Error en Gemini o API:", e);
-            const saludoError = "🚗 *ONE4-Bot:* Estimado cliente, disculpe, estoy actualizando mis sistemas. 🔧\n\nPero aquí le dejo nuestros accesos directos:\n\n";
-            const menuFallback = `
-1️⃣ *Pagos:* https://www.one4cars.com/medios_de_pago.php/
-2️⃣ *Edo. Cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
-3️⃣ *Precios:* https://www.one4cars.com/lista_de_precios.php/
-4️⃣ *Pedidos:* https://www.one4cars.com/tomar_pedido.php/
-6️⃣ *Registro:* https://www.one4cars.com/afiliar_clientes.php/
-8️⃣ *Despacho:* https://www.one4cars.com/despacho.php/
+                const chat = model.startChat({
+                    history: [
+                        { role: "user", parts: [{ text: systemInstructions }] },
+                        { role: "model", parts: [{ text: "Entendido. Soy ONE4-Bot, listo para asistir." }] }
+                    ],
+                    generationConfig: { maxOutputTokens: 800 }
+                });
 
-Estamos a su orden. Un asesor humano revisará su mensaje en breve.`;
+                const result = await chat.sendMessage(text);
+                const response = result.response.text();
+                await sock.sendMessage(from, { text: response });
 
-            await sock.sendMessage(from, { text: saludoError + menuFallback });
-        }
-    });
+            } catch (e) {
+                console.error("Error en IA:", e);
+                const fallback = "🚗 *ONE4-Bot:* Estamos actualizando sistemas. Aquí accesos rápidos:\n\n" +
+                    "1️⃣ Pagos: https://www.one4cars.com/medios_de_pago.php/\n" +
+                    "2️⃣ Estado de cuenta: https://www.one4cars.com/estado_de_cuenta.php/\n" +
+                    "3️⃣ Precios: https://www.one4cars.com/lista_de_precios.php/\n" +
+                    "4️⃣ Pedidos: https://www.one4cars.com/tomar_pedido.php/\n" +
+                    "6️⃣ Registro: https://www.one4cars.com/afiliar_clientes.php/\n" +
+                    "8️⃣ Despacho: https://www.one4cars.com/despacho.php/\n\nUn operador humano revisará su mensaje.";
+                await sock.sendMessage(from, { text: fallback });
+            }
+        });
+
+        console.log("ONE4-Bot iniciado correctamente.");
+
+    } catch (err) {
+        console.error("Fallo al iniciar el bot:", err);
+        setTimeout(startBot, 5000);
+    }
 }
 
 // --- SERVIDOR WEB ---
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
-
     const header = `
         <header class="p-3 mb-4 border-bottom bg-dark text-white shadow">
             <div class="container d-flex justify-content-between align-items-center">
@@ -182,9 +184,8 @@ const server = http.createServer(async (req, res) => {
             const v = await cobranza.obtenerVendedores();
             const z = await cobranza.obtenerZonas();
             const d = await cobranza.obtenerListaDeudores(parsedUrl.query);
-
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.write(`...`); // Mantener tu HTML completo de cobranza como ya lo tenías
+            res.write(`<!-- Aquí tu HTML de cobranza completo -->`);
             res.end();
         } catch (e) { res.end(`Error SQL: ${e.message}`); }
 
@@ -199,9 +200,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(`
             <html>
-            <head>
-                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-            </head>
+            <head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
             <body class="bg-light text-center">
                 ${header}
                 <div class="container py-5">
@@ -213,7 +212,7 @@ const server = http.createServer(async (req, res) => {
                                 : `<div class="alert alert-success fw-bold p-4 h2">${qrCodeData || "Iniciando..."}</div>`
                             }
                         </div>
-                        <p class="text-muted small">Escanee el código para activar el servicio de ONE4CARS</p>
+                        <p class="text-muted small">Escanee el código para activar ONE4CARS</p>
                         <p class="text-primary fw-bold small">Bot Dinámico con IA + API Dólar Activo</p>
                         <hr>
                         <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2">IR AL PANEL DE COBRANZA</a>
@@ -224,4 +223,5 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
+// --- INICIAR SERVIDOR Y BOT ---
 server.listen(port, '0.0.0.0', () => { startBot(); });
