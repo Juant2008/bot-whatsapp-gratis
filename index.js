@@ -11,6 +11,7 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const pino = require('pino');
+const fs = require('fs');
 const mysql = require('mysql2/promise');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
@@ -57,6 +58,11 @@ let sock = null;
 let qrCodeData = "Iniciando...";
 let isConnecting = false;
 
+// ===== CREAR CARPETA AUTH =====
+if (!fs.existsSync('./auth_info')) {
+    fs.mkdirSync('./auth_info');
+}
+
 // ===== API DOLAR =====
 function obtenerTasa(apiUrl) {
     return new Promise((resolve) => {
@@ -76,7 +82,7 @@ function obtenerTasa(apiUrl) {
 
 async function construirInstrucciones() {
     const tasa = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
-    return `Eres ONE4-Bot. Dólar BCV: ${tasa || 'No disponible'}`;
+    return `Eres ONE4-Bot de autopartes. Dólar BCV: ${tasa || 'No disponible'}`;
 }
 
 // ===== BOT =====
@@ -103,9 +109,7 @@ async function startBot() {
             const { connection, lastDisconnect, qr } = u;
 
             if (qr) {
-                qrcode.toDataURL(qr, (_, url) => {
-                    qrCodeData = url;
-                });
+                qrcode.toDataURL(qr, (_, url) => qrCodeData = url);
             }
 
             if (connection === 'open') {
@@ -124,10 +128,17 @@ async function startBot() {
 
                 isConnecting = false;
 
-                // 🔥 SI SE DESLOGEA → BORRAR SESIÓN
+                // 🔥 SI WHATSAPP BLOQUEA REGISTRO
+                if (code === 401 || code === 515) {
+                    console.log("⛔ Bloqueo temporal. Esperando 20s...");
+                    setTimeout(startBot, 20000);
+                    return;
+                }
+
+                // 🔥 SI LOGOUT → BORRAR SESIÓN
                 if (code === DisconnectReason.loggedOut) {
-                    console.log("⚠️ Sesión cerrada, eliminando auth_info");
-                    require('fs').rmSync('auth_info', { recursive: true, force: true });
+                    console.log("🧹 Eliminando sesión...");
+                    fs.rmSync('auth_info', { recursive: true, force: true });
                 }
 
                 setTimeout(startBot, 8000);
@@ -147,7 +158,7 @@ async function startBot() {
 
             const tel = from.split('@')[0];
 
-            // 🔥 HUMANO
+            // 🔥 HUMANO INTERVIENE
             if (msg.key.fromMe) {
                 await setModo(tel, 'humano');
                 return;
@@ -183,7 +194,6 @@ async function startBot() {
                     text: "⚠️ Sistema en mantenimiento"
                 });
             }
-
         });
 
     } catch (e) {
