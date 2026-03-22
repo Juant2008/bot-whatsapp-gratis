@@ -6,24 +6,20 @@ const https = require('https');
 const url = require('url');
 const pino = require('pino');
 const fs = require('fs');
+const mysql = require('mysql2/promise');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
-const mysql = require('mysql2/promise');
 
 // ===== CONFIG =====
+const PORT = process.env.PORT || 10000;
+let serverStarted = false; // 🔥 evita doble listen
+
+// ===== IA =====
 const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-});
-
-let qrCodeData = "";
-let socketBot = null;
-const port = process.env.PORT || 10000;
-
-// ===== DB CONTROL HUMANO =====
+// ===== DB =====
 const dbConfig = {
     host: 'one4cars.com',
     user: 'juant200_one4car',
@@ -31,6 +27,11 @@ const dbConfig = {
     database: 'juant200_venezon'
 };
 
+// ===== VARIABLES =====
+let qrCodeData = "Iniciando...";
+let socketBot = null;
+
+// ===== CONTROL HUMANO =====
 async function setModo(tel, modo) {
     try {
         const conn = await mysql.createConnection(dbConfig);
@@ -87,6 +88,7 @@ async function construirInstrucciones() {
 
 // ===== BOT =====
 async function startBot() {
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
@@ -107,7 +109,7 @@ async function startBot() {
 
         if (connection === 'open') {
             qrCodeData = "ONLINE ✅";
-            console.log("Conectado");
+            console.log("Bot conectado");
         }
 
         if (connection === 'close') {
@@ -119,6 +121,7 @@ async function startBot() {
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
+
         if (type !== 'notify') return;
 
         const msg = messages[0];
@@ -129,16 +132,16 @@ async function startBot() {
         // ❌ IGNORAR GRUPOS
         if (from.includes('@g.us')) return;
 
-        const telefono = from.split('@')[0];
+        const tel = from.split('@')[0];
 
-        // 🔴 SI ES TUYO → ACTIVAR HUMANO
+        // 🔴 SI ES TUYO → HUMANO
         if (msg.key.fromMe) {
-            await setModo(telefono, 'humano');
+            await setModo(tel, 'humano');
             return;
         }
 
-        // 🔴 SI ESTÁ EN HUMANO → NO RESPONDE
-        if (await esHumano(telefono)) return;
+        // 🔴 SI HUMANO → NO RESPONDE
+        if (await esHumano(tel)) return;
 
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         if (!text) return;
@@ -148,8 +151,7 @@ async function startBot() {
 
             const chat = model.startChat({
                 history: [
-                    { role: "user", parts: [{ text: instrucciones }] },
-                    { role: "model", parts: [{ text: "Entendido." }] }
+                    { role: "user", parts: [{ text: instrucciones }] }
                 ]
             });
 
@@ -160,7 +162,7 @@ async function startBot() {
 
         } catch (e) {
             await sock.sendMessage(from, {
-                text: "⚠️ Sistema en mantenimiento. Escriba *menu*."
+                text: "⚠️ Error temporal. Escriba *menu*."
             });
         }
     });
@@ -168,26 +170,37 @@ async function startBot() {
 
 // ===== SERVER =====
 const server = http.createServer(async (req, res) => {
-    const parsedUrl = url.parse(req.url, true);
 
-    if (parsedUrl.pathname === '/cobranza') {
+    const parsed = url.parse(req.url, true);
+
+    if (parsed.pathname === '/cobranza') {
         const d = await cobranza.obtenerListaDeudores({});
         res.end(`<h2>Cobranza (${d.length})</h2>`);
         return;
     }
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+
     res.end(`
         <h2>ONE4CARS BOT</h2>
         ${
             qrCodeData.startsWith('data')
             ? `<img src="${qrCodeData}" width="250">`
-            : `<h3>${qrCodeData || "Iniciando..."}</h3>`
+            : `<h3>${qrCodeData}</h3>`
         }
     `);
 });
 
-// ✅ SOLO UNA VEZ
-server.listen(port, '0.0.0.0', () => {
-    startBot();
-});
+// 🔥 SOLUCIÓN DEFINITIVA DEL ERROR
+if (!serverStarted) {
+    serverStarted = true;
+
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log("Servidor activo en puerto", PORT);
+        startBot();
+    });
+
+    server.on('error', (err) => {
+        console.log("Error controlado:", err.code);
+    });
+}
