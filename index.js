@@ -2,21 +2,28 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
+const https = require('https');
 const url = require('url');
 const pino = require('pino');
 const fs = require('fs');
-const mysql = require('mysql2/promise');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const cobranza = require('./cobranza');
+const mysql = require('mysql2/promise');
 
 // ===== CONFIG =====
-const PORT = process.env.PORT || 10000;
-const apiKey = process.env.GEMINI_API_KEY || "";
-
-// ===== IA =====
+const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// ===== DB =====
+const model = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
+    generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+});
+
+let qrCodeData = "";
+let socketBot = null;
+const port = process.env.PORT || 10000;
+
+// ===== DB CONTROL HUMANO =====
 const dbConfig = {
     host: 'one4cars.com',
     user: 'juant200_one4car',
@@ -24,99 +31,83 @@ const dbConfig = {
     database: 'juant200_venezon'
 };
 
-// ===== VARIABLES =====
-let qrCodeData = "Iniciando...";
-let sockGlobal = null;
-
-// ===== HELPERS =====
-function limpiarCedula(texto) {
-    return texto.replace(/\D/g, '');
-}
-
-async function db() {
-    return await mysql.createConnection(dbConfig);
-}
-
-async function getSesion(tel) {
-    const conn = await db();
-    const [r] = await conn.execute("SELECT * FROM control_chat WHERE telefono=?", [tel]);
-    await conn.end();
-    return r[0] || null;
-}
-
 async function setModo(tel, modo) {
-    const conn = await db();
-    await conn.execute(`
-        INSERT INTO control_chat (telefono, modo)
-        VALUES (?,?)
-        ON DUPLICATE KEY UPDATE modo=VALUES(modo)
-    `, [tel, modo]);
-    await conn.end();
+    try {
+        const conn = await mysql.createConnection(dbConfig);
+        await conn.execute(`
+            INSERT INTO control_chat (telefono, modo)
+            VALUES (?,?)
+            ON DUPLICATE KEY UPDATE modo=VALUES(modo)
+        `, [tel, modo]);
+        await conn.end();
+    } catch {}
 }
 
-async function guardarUsuario(tel, usuario) {
-    const conn = await db();
-    await conn.execute(`
-        INSERT INTO control_chat (telefono, usuario, modo)
-        VALUES (?,?, 'bot')
-        ON DUPLICATE KEY UPDATE usuario=VALUES(usuario)
-    `, [tel, usuario]);
-    await conn.end();
+async function esHumano(tel) {
+    try {
+        const conn = await mysql.createConnection(dbConfig);
+        const [r] = await conn.execute(`SELECT modo FROM control_chat WHERE telefono=?`, [tel]);
+        await conn.end();
+        return r[0] && r[0].modo === 'humano';
+    } catch { return false; }
 }
 
-async function buscarCliente(usuario) {
-    const conn = await db();
-    const [r] = await conn.execute(
-        "SELECT id_cliente, nombres FROM tab_clientes WHERE usuario=? LIMIT 1",
-        [usuario]
-    );
-    await conn.end();
-    return r[0] || null;
+// ===== API DÓLAR =====
+function obtenerTasa(apiUrl) {
+    return new Promise((resolve) => {
+        https.get(apiUrl, (res) => {
+            let data = '';
+            res.on('data', (chunk) => data += chunk);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(data);
+                    resolve(json.promedio || null);
+                } catch { resolve(null); }
+            });
+        }).on('error', () => resolve(null));
+    });
 }
 
-async function obtenerSaldo(id) {
-    const conn = await db();
-    const [r] = await conn.execute(
-        "SELECT SUM(total - abono_factura) saldo FROM tab_facturas WHERE id_cliente=? AND pagada='NO'",
-        [id]
-    );
-    await conn.end();
-    return r[0].saldo || 0;
-}
+// ===== PROMPT =====
+async function construirInstrucciones() {
+    const tasaOficial = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/oficial');
+    const tasaParalelo = await obtenerTasa('https://ve.dolarapi.com/v1/dolares/paralelo');
 
-async function getChats() {
-    const conn = await db();
-    const [r] = await conn.execute("SELECT * FROM control_chat ORDER BY updated_at DESC");
-    await conn.end();
-    return r;
+    const txtOficial = tasaOficial ? `Bs. ${tasaOficial}` : "No disponible";
+    const txtParalelo = tasaParalelo ? `Bs. ${tasaParalelo}` : "No disponible";
+    const fecha = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
+
+    let contenido = fs.readFileSync('./instrucciones.txt', 'utf8');
+    contenido = contenido.replace('${fecha}', fecha);
+    contenido = contenido.replace('${txtOficial}', txtOficial);
+    contenido = contenido.replace('${txtParalelo}', txtParalelo);
+
+    return contenido;
 }
 
 // ===== BOT =====
 async function startBot() {
-
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         version,
         auth: state,
-        logger: pino({ level: 'silent' })
+        logger: pino({ level: 'silent' }),
+        browser: ["ONE4CARS", "Chrome", "1.0.0"]
     });
 
-    sockGlobal = sock;
-
+    socketBot = sock;
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (u) => {
         const { connection, lastDisconnect, qr } = u;
 
-        if (qr) {
-            qrcode.toDataURL(qr, (_, url) => qrCodeData = url);
-        }
+        if (qr) qrcode.toDataURL(qr, (_, url) => qrCodeData = url);
 
         if (connection === 'open') {
             qrCodeData = "ONLINE ✅";
-            console.log("CONECTADO");
+            console.log("Conectado");
         }
 
         if (connection === 'close') {
@@ -127,132 +118,76 @@ async function startBot() {
         }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
 
         const msg = messages[0];
         if (!msg.message) return;
 
         const from = msg.key.remoteJid;
+
+        // ❌ IGNORAR GRUPOS
         if (from.includes('@g.us')) return;
 
-        const tel = from.split('@')[0];
+        const telefono = from.split('@')[0];
 
-        // SI ES TUYO → MODO HUMANO
+        // 🔴 SI ES TUYO → ACTIVAR HUMANO
         if (msg.key.fromMe) {
-            await setModo(tel, 'humano');
+            await setModo(telefono, 'humano');
             return;
         }
+
+        // 🔴 SI ESTÁ EN HUMANO → NO RESPONDE
+        if (await esHumano(telefono)) return;
 
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         if (!text) return;
 
-        const sesion = await getSesion(tel);
-
-        if (sesion && sesion.modo === 'humano') return;
-
-        // SALUDO
-        if (!sesion) {
-            await sock.sendMessage(from, {
-                text: "👋 Bienvenido a ONE4CARS 🚗\n\nEnvíe su RIF o escriba *menu*"
-            });
-        }
-
-        // MENU
-        if (text.toLowerCase().includes("menu")) {
-            await sock.sendMessage(from, {
-                text: "📋 MENÚ:\n1 Pagos\n2 Estado de cuenta\n3 Precios\n4 Pedidos\n6 Registro\n8 Despacho"
-            });
-            return;
-        }
-
-        // IDENTIFICAR CLIENTE
-        if (!sesion || !sesion.usuario) {
-            const cedula = limpiarCedula(text);
-
-            if (cedula.length >= 6) {
-                const cliente = await buscarCliente(cedula);
-
-                if (cliente) {
-                    await guardarUsuario(tel, cedula);
-
-                    await sock.sendMessage(from, {
-                        text: `Hola ${cliente.nombres} 👋\nEscriba *saldo* para consultar`
-                    });
-                    return;
-                }
-            }
-
-            await sock.sendMessage(from, {
-                text: "🔐 Envíe su RIF para continuar"
-            });
-            return;
-        }
-
-        const cliente = await buscarCliente(sesion.usuario);
-
-        // SALDO
-        if (text.toLowerCase().includes("saldo")) {
-            const saldo = await obtenerSaldo(cliente.id_cliente);
-
-            await sock.sendMessage(from, {
-                text: `💰 Su saldo es: $${saldo.toFixed(2)}`
-            });
-            return;
-        }
-
-        // IA
         try {
-            const instrucciones = fs.readFileSync('./instrucciones.txt', 'utf8');
+            const instrucciones = await construirInstrucciones();
 
             const chat = model.startChat({
-                history: [{ role: "user", parts: [{ text: instrucciones }] }]
+                history: [
+                    { role: "user", parts: [{ text: instrucciones }] },
+                    { role: "model", parts: [{ text: "Entendido." }] }
+                ]
             });
 
-            const r = await chat.sendMessage(text);
-            await sock.sendMessage(from, { text: r.response.text() });
+            const result = await chat.sendMessage(text);
+            const response = result.response.text();
 
-        } catch {
-            await sock.sendMessage(from, { text: "⚠️ Error, escriba menu." });
+            await sock.sendMessage(from, { text: response });
+
+        } catch (e) {
+            await sock.sendMessage(from, {
+                text: "⚠️ Sistema en mantenimiento. Escriba *menu*."
+            });
         }
-
     });
 }
 
 // ===== SERVER =====
 const server = http.createServer(async (req, res) => {
+    const parsedUrl = url.parse(req.url, true);
 
-    const parsed = url.parse(req.url, true);
-
-    if (parsed.pathname === '/panel') {
-        const chats = await getChats();
-
-        res.end(`
-        <h2>Panel</h2>
-        ${chats.map(c => `
-        <p>${c.telefono} - ${c.modo}
-        <a href="/modo?tel=${c.telefono}&modo=${c.modo === 'bot' ? 'humano' : 'bot'}">Cambiar</a>
-        </p>
-        `).join('')}
-        `);
+    if (parsedUrl.pathname === '/cobranza') {
+        const d = await cobranza.obtenerListaDeudores({});
+        res.end(`<h2>Cobranza (${d.length})</h2>`);
         return;
     }
 
-    if (parsed.pathname === '/modo') {
-        await setModo(parsed.query.tel, parsed.query.modo);
-        res.end("OK");
-        return;
-    }
-
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
-    <h2>ONE4CARS BOT</h2>
-    ${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" width="250">` : `<h3>${qrCodeData}</h3>`}
-    <br><a href="/panel">Panel</a>
+        <h2>ONE4CARS BOT</h2>
+        ${
+            qrCodeData.startsWith('data')
+            ? `<img src="${qrCodeData}" width="250">`
+            : `<h3>${qrCodeData || "Iniciando..."}</h3>`
+        }
     `);
-
 });
 
-// 🔥 IMPORTANTE: SOLO UNA VEZ
-server.listen(PORT, () => {
-    console.log("Servidor corriendo en puerto", PORT);
+// ✅ SOLO UNA VEZ
+server.listen(port, '0.0.0.0', () => {
     startBot();
 });
