@@ -12,7 +12,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // MODULOS EXTERNOS
 const cobranza = require('./cobranza');
 
-// CONFIGURACION
+// CONFIGURACION - Render asigna el puerto automáticamente
 const PORT = process.env.PORT || 10000;
 const apiKey = process.env.GEMINI_API_KEY;
 
@@ -33,9 +33,6 @@ const dbConfig = {
 let qrCodeData = "Iniciando...";
 let socketBot = null;
 let dolarInfo = { bcv: '0', paralelo: '0' };
-
-// Aumentar límites para evitar el warning de MaxListeners
-process.setMaxListeners(20);
 
 // ===== BASE DE DATOS =====
 async function db() { return await mysql.createConnection(dbConfig); }
@@ -182,7 +179,7 @@ async function startBot() {
                 await sock.sendMessage(from, { text: result.response.text() });
             } catch (e) { console.log("IA Error"); }
         });
-    } catch (err) { console.log("Error en startBot:", err); }
+    } catch (err) { console.log("Error Bot:", err); }
 }
 
 // ===== SERVIDOR HTTP =====
@@ -200,10 +197,7 @@ const server = http.createServer(async (req, res) => {
         } catch (e) { res.end(`Error: ${e.message}`); }
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
-        req.on('end', () => { 
-            if (socketBot) cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(b).facturas); 
-            res.end("OK"); 
-        });
+        req.on('end', () => { if (socketBot) cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(b).facturas); res.end("OK"); });
     } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
@@ -225,30 +219,22 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-// ===== LOGICA DE ARRANQUE ROBUSTA =====
+// ===== ARRANQUE ÚNICO SIN REINTENTOS INTERNOS =====
 
-// 1. Matar el proceso si el puerto está ocupado (Evita bucles de reintento)
 server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
-        console.log(`[PUERTO OCUPADO] El puerto ${PORT} no está libre. Terminando proceso...`);
+        console.error(`!!! PUERTO ${PORT} OCUPADO. Saliendo para limpieza de red.`);
         process.exit(1); 
     }
 });
 
-// 2. Intentar arrancar una sola vez
+// El truco: Intentamos escuchar en el puerto. Si falla, morimos rápido para que Render reinicie.
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`[EXITO] Servidor Web escuchando en puerto ${PORT}`);
-    
-    // Solo si el servidor web tiene éxito, iniciamos lo demás
+    console.log(`✅ Servidor Admin activo en puerto ${PORT}`);
     startBot();
     actualizarDolar();
     setInterval(actualizarDolar, 3600000);
 });
 
-// 3. Capturar señales de Render para apagar limpiamente
-process.on('SIGTERM', () => {
-    console.log('Recibida señal SIGTERM. Cerrando...');
-    server.close(() => {
-        process.exit(0);
-    });
-});
+// Limpieza para Render
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
