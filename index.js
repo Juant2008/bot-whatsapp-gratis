@@ -249,37 +249,29 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-// ESCUCHA DE PUERTO CON MANEJO DE ERRORES MEJORADO
-function startServer() {
-    server.listen(PORT, '0.0.0.0', () => {
-        console.log(`Servidor activo en puerto ${PORT}`);
-        startBot();
-        actualizarDolar();
-        setInterval(actualizarDolar, 3600000);
-    });
-
-    server.on('error', (e) => {
-        if (e.code === 'EADDRINUSE') {
-            console.error(`Puerto ${PORT} ocupado. Reintentando en 2 segundos...`);
-            setTimeout(() => {
-                server.close();
-                server.listen(PORT);
-            }, 2000);
-        }
-    });
-}
-
-startServer();
-
-// Gestión de cierre limpia para evitar dejar el puerto ocupado en el próximo despliegue
-process.on('SIGTERM', () => {
-    console.log('Cerrando servidor por instrucción de Render...');
-    server.close(() => {
-        console.log('Servidor cerrado.');
-        process.exit(0);
-    });
+// ===== ARRANQUE UNICO Y LIMPIO =====
+// Manejador de errores del servidor ANTES de intentar escuchar
+server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+        console.error(`!!! CRITICAL: El puerto ${PORT} está bloqueado por otro proceso.`);
+        console.error(`Saliendo para que Render reinicie el contenedor...`);
+        process.exit(1); // Importante: Salir permite que Render limpie el puerto.
+    }
 });
 
-process.on('SIGINT', () => {
-    server.close(() => process.exit(0));
+// Escucha única
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ SERVIDOR WEB ONLINE EN PUERTO ${PORT}`);
+    startBot(); // Inicia el bot de WhatsApp solo si el puerto se abrió bien
+    actualizarDolar();
+    setInterval(actualizarDolar, 3600000);
+});
+
+// Gestión de cierre del sistema (libera el puerto al apagar)
+process.on('SIGTERM', () => {
+    console.log('Cerrando servidor...');
+    server.close(() => {
+        console.log('Puerto liberado.');
+        process.exit(0);
+    });
 });
