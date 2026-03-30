@@ -9,39 +9,23 @@ const mysql = require('mysql2/promise');
 const axios = require('axios');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// Módulos internos
+// Módulos
 const cobranza = require('./cobranza');
 const marketing = require('./marketing');
 
 const PORT = process.env.PORT || 10000;
-const apiKey = process.env.GEMINI_API_KEY;
-const genAI = new GoogleGenerativeAI(apiKey);
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// Configuración DB
-const dbConfig = {
-    host: 'one4cars.com',
-    user: 'juant200_one4car',
-    password: 'Notieneclave1*',
-    database: 'juant200_venezon'
-};
+const dbConfig = { host: 'one4cars.com', user: 'juant200_one4car', password: 'Notieneclave1*', database: 'juant200_venezon' };
 
 let qrCodeData = "Iniciando...";
 let socketBot = null;
-let dolarInfo = { bcv: '0', paralelo: '0' };
+let dolarInfo = { bcv: 'Cargando...', paralelo: 'Cargando...' };
 
-// ===== FUNCIONES DE AYUDA =====
 async function db() { return await mysql.createConnection(dbConfig); }
 
-async function obtenerDolar() {
-    try {
-        // Usando una API pública de ejemplo para Venezuela
-        const res = await axios.get('https://pydolarvenezuela-api.vercel.app/api/v1/dollar');
-        dolarInfo.bcv = res.data.monitors.bcv.price;
-        dolarInfo.paralelo = res.data.monitors.enparalelovzla.price;
-    } catch (e) { console.log("Error obteniendo dólar", e.message); }
-}
-
+// --- FUNCIONES DE CONTROL ---
 async function setModo(tel, modo) {
     const conn = await db();
     await conn.execute("INSERT INTO control_chat (telefono, modo) VALUES (?,?) ON DUPLICATE KEY UPDATE modo=VALUES(modo)", [tel, modo]);
@@ -55,7 +39,15 @@ async function getSesion(tel) {
     return r[0] || null;
 }
 
-// ===== LÓGICA DEL BOT =====
+async function obtenerDolar() {
+    try {
+        const res = await axios.get('https://pydolarvenezuela-api.vercel.app/api/v1/dollar');
+        dolarInfo.bcv = res.data.monitors.bcv.price;
+        dolarInfo.paralelo = res.data.monitors.enparalelovzla.price;
+    } catch (e) { console.error("Error Dólar:", e.message); }
+}
+
+// --- BOT WHATSAPP ---
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
@@ -74,120 +66,96 @@ async function startBot() {
         if (qr) qrcode.toDataURL(qr, (_, url) => qrCodeData = url);
         if (connection === 'open') { qrCodeData = "ONLINE ✅"; console.log("WhatsApp Conectado"); }
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startBot();
+            if ((lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut) startBot();
         }
     });
 
     socketBot.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.message || msg.key.remoteJid === 'status@broadcast') return;
+        const m = messages[0];
+        if (!m.message || m.key.remoteJid === 'status@broadcast') return;
 
-        const from = msg.key.remoteJid;
-        
-        // 1. IGNORAR GRUPOS
-        if (from.endsWith('@g.us')) return;
+        const from = m.key.remoteJid;
+        if (from.includes('@g.us')) return; // IGNORAR GRUPOS
 
         const tel = from.split('@')[0];
 
-        // 2. DETECTAR CONTROL HUMANO (Si yo envío un mensaje desde el cel, el bot se calla)
-        if (msg.key.fromMe) {
+        // CONTROL HUMANO: Si yo escribo desde el cel, el bot se apaga para ese cliente
+        if (m.key.fromMe) {
             await setModo(tel, 'humano');
             return;
         }
 
-        // 3. VERIFICAR SI EL BOT DEBE RESPONDER
         const sesion = await getSesion(tel);
         if (sesion && sesion.modo === 'humano') return;
 
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase().trim();
-        if (!text) return;
-
-        // Comandos rápidos
-        if (text === 'dolar' || text === 'precio') {
+        const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").toLowerCase();
+        
+        if (text.includes("dolar") || text.includes("tasa")) {
             await obtenerDolar();
-            return await socketBot.sendMessage(from, { text: `💵 *Tasas del día:*\n\nBCV: ${dolarInfo.bcv} Bs.\nEnParalelo: ${dolarInfo.paralelo} Bs.` });
+            return socketBot.sendMessage(from, { text: `📊 *Tasas de Cambio:*\n\nBCV: ${dolarInfo.bcv} Bs.\nParalelo: ${dolarInfo.paralelo} Bs.` });
         }
 
-        // Lógica de IA y Menú (Integrar aquí tu lógica previa de RIF/Saldo)
+        // IA GEMINI
         try {
             const prompt = fs.readFileSync('./instrucciones.txt', 'utf8');
-            const chatIA = model.startChat({ history: [{ role: "user", parts: [{ text: prompt }] }] });
-            const result = await chatIA.sendMessage(text);
+            const result = await model.generateContent(`${prompt}\n\nUsuario dice: ${text}`);
             await socketBot.sendMessage(from, { text: result.response.text() });
-        } catch (e) {
-            console.error(e);
-        }
+        } catch (e) { console.error("Error IA:", e); }
     });
 }
 
-// ===== SERVIDOR WEB / PANEL DE CONTROL =====
+// --- SERVIDOR HTTP (PANEL) ---
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
-    const header = `<nav class="navbar navbar-dark bg-dark mb-4"><div class="container"><a class="navbar-brand" href="/">ONE4CARS BOT</a></div></nav>`;
+    const header = `<nav class="navbar navbar-dark bg-dark mb-4"><div class="container"><a class="navbar-brand" href="/">ONE4CARS ADMIN</a></div></nav>`;
 
     if (parsedUrl.pathname === '/cobranza') {
-        try {
-            const v = await cobranza.obtenerVendedores();
-            const z = await cobranza.obtenerZonas();
-            const d = await cobranza.obtenerListaDeudores(parsedUrl.query);
-            res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
-            res.end(await cobranza.generarHTML(v, z, d, header, parsedUrl.query));
-        } catch (e) { res.end(`Error: ${e.message}`); }
+        const v = await cobranza.obtenerVendedores();
+        const z = await cobranza.obtenerZonas();
+        const d = await cobranza.obtenerListaDeudores(parsedUrl.query);
+        res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
+        res.end(await cobranza.generarHTML(v, z, d, header, parsedUrl.query));
 
-    } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method==='POST') {
-        let b=''; req.on('data', c=>b+=c); 
-        req.on('end', ()=>{ 
-            cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(b).facturas); 
+    } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
+        let body = ''; req.on('data', c => body += c);
+        req.on('end', () => { 
+            cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(body).facturas); 
             res.end("OK"); 
         });
 
-    } else if (parsedUrl.pathname === '/enviar-marketing' && req.method==='POST') {
-        // Nuevo endpoint para Lista de Precios y Promo Personalizada
-        let b=''; req.on('data', c=>b+=c);
-        req.on('end', async ()=>{
-            const data = JSON.parse(b);
-            if(data.tipo === 'precios') await marketing.enviarListaPrecios(socketBot, data.clientes);
-            if(data.tipo === 'promo') await marketing.enviarPromoPersonalizada(socketBot, data.clientes);
+    } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
+        let body = ''; req.on('data', c => body += c);
+        req.on('end', async () => {
+            const data = JSON.parse(body);
+            if (data.tipo === 'precios') await marketing.enviarListaPrecios(socketBot, data.clientes);
+            if (data.tipo === 'promo') await marketing.enviarPromoWeb(socketBot, data.clientes);
             res.end("OK");
         });
 
     } else {
-        // ESTADO BOT Y QR
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
-        res.end(`
-            <html>
-            <head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
-            <body class="bg-light text-center">
-            ${header}
-            <div class="container py-5">
-                <div class="card shadow p-4 mx-auto" style="max-width:450px;">
-                    <h4>Status: ${qrCodeData === 'ONLINE ✅' ? '<span class="text-success">CONECTADO</span>' : 'ESCANEAR QR'}</h4>
-                    <div class="my-4">
-                        ${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" class="img-fluid border shadow">` : `<h2 class="alert alert-info">${qrCodeData}</h2>`}
-                    </div>
-                    <div class="d-grid gap-2">
-                        <a href="/cobranza" class="btn btn-primary fw-bold">PANEL DE COBRANZA</a>
-                        <button onclick="enviarMarketing('precios')" class="btn btn-outline-dark">ENVIAR CATÁLOGO A SELECCIONADOS</button>
-                        <button onclick="enviarMarketing('promo')" class="btn btn-outline-info">ENVIAR PROMO WEB A SELECCIONADOS</button>
-                    </div>
-                </div>
-            </div>
-            <script>
-                async function enviarMarketing(tipo) {
-                    if(!confirm('¿Desea enviar esto a los clientes seleccionados en los filtros?')) return;
-                    // Aquí se integra con la lógica de selección de cobranza.js
-                    alert('Iniciando envío de ' + tipo);
-                    // Lógica para capturar IDs y enviar al backend...
-                }
-            </script>
-            </body></html>
-        `);
+        res.end(`<html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
+        <body class="bg-light text-center">${header}<div class="container py-5">
+        <div class="card shadow p-4 mx-auto" style="max-width:450px;">
+        <h4>Status de Conexión</h4><div class="mb-4">
+        ${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" class="border shadow rounded p-2 bg-white" style="width:250px;">` : `<div class="alert alert-success fw-bold p-4 h2">${qrCodeData}</div>`}
+        </div><p class="text-primary fw-bold">Dólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}</p><hr>
+        <a href="/cobranza" class="btn btn-primary w-100 fw-bold py-2 mb-2">IR AL PANEL DE COBRANZA</a>
+        </div></div></body></html>`);
+    }
+});
+
+// EVITAR ERROR EADDRINUSE
+server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+        console.log('Puerto ocupado, reintentando...');
+        setTimeout(() => { server.close(); server.listen(PORT); }, 1000);
     }
 });
 
 server.listen(PORT, () => {
-    console.log(`Servidor en puerto ${PORT}`);
+    console.log(`Servidor corriendo en puerto ${PORT}`);
     startBot();
-    setInterval(obtenerDolar, 3600000); // Actualiza dólar cada hora
+    obtenerDolar();
+    setInterval(obtenerDolar, 3600000); // Cada hora
 });
