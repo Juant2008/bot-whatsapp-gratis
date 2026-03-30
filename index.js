@@ -13,6 +13,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const cobranza = require('./cobranza');
 
 // CONFIGURACION
+// Si el puerto 10000 falla, Render a veces asigna otros. Usamos process.env.PORT estrictamente.
 const PORT = process.env.PORT || 10000;
 const apiKey = process.env.GEMINI_API_KEY;
 
@@ -106,19 +107,14 @@ const Marketing = {
             if (r[0]) {
                 const c = r[0];
                 const msg = `*🛠️ ¡Tu Negocio, al Máximo Nivel con ONE4CARS!*
-
 ¡Hola *${c.nombres}*! 👋
-
 Recibe un cordial saludo de la gerencia de ventas de *ONE4CARS*.
-
 *🌐 Acceso a tu Portal Mayorista:*
 *Enlace:* https://one4cars.com/mayoristas
 *LOGIN:* ${c.usuario}
 *PASSWORD:* ${c.clave}
-
 *🚀 Tu página personalizada:*
 ➡️ https://www.one4cars.com/${c.usuario}
-
 ¡Mucho éxito comercial!`;
                 await sock.sendMessage(`${c.telefono}@s.whatsapp.net`, { text: msg });
                 await new Promise(res => setTimeout(res, 2000));
@@ -131,17 +127,14 @@ Recibe un cordial saludo de la gerencia de ventas de *ONE4CARS*.
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
-
     const sock = makeWASocket({
         version,
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false
     });
-
     socketBot = sock;
     sock.ev.on('creds.update', saveCreds);
-
     sock.ev.on('connection.update', (u) => {
         const { connection, lastDisconnect, qr } = u;
         if (qr) qrcode.toDataURL(qr, { scale: 10 }, (_, url) => qrCodeData = url);
@@ -151,32 +144,21 @@ async function startBot() {
             if (r) startBot();
         }
     });
-
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message || msg.key.remoteJid === 'status@broadcast') return;
-
         const from = msg.key.remoteJid;
         if (from.includes('@g.us')) return;
-
         const tel = from.split('@')[0];
-
-        if (msg.key.fromMe) {
-            await setModo(tel, 'humano');
-            return;
-        }
-
+        if (msg.key.fromMe) { await setModo(tel, 'humano'); return; }
         const sesion = await getSesion(tel);
         if (sesion && sesion.modo === 'humano') return;
-
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         if (!text) return;
-
         if (text.toLowerCase() === 'dolar') {
             await actualizarDolar();
             return await sock.sendMessage(from, { text: `💵 BCV: ${dolarInfo.bcv}\n📈 Paralelo: ${dolarInfo.paralelo}` });
         }
-
         if (!sesion || !sesion.usuario) {
             const cedula = text.replace(/\D/g, '');
             if (cedula.length >= 6) {
@@ -190,14 +172,12 @@ async function startBot() {
             await sock.sendMessage(from, { text: "Bienvenido a ONE4CARS. Por favor envíe su RIF o Cédula." });
             return;
         }
-
         if (text.toLowerCase().includes("saldo")) {
             const c = await buscarCliente(sesion.usuario);
             const s = await obtenerSaldo(c.id_cliente);
             await sock.sendMessage(from, { text: `💰 Su saldo es: $${s.toFixed(2)}` });
             return;
         }
-
         try {
             const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
             const result = await model.generateContent(`${inst}\n\nCliente: ${text}`);
@@ -219,14 +199,9 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
             res.end(await cobranza.generarHTML(v, z, d, header, parsedUrl.query));
         } catch (e) { res.end(`Error: ${e.message}`); }
-
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
-        req.on('end', () => { 
-            if (socketBot) cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(b).facturas); 
-            res.end("OK"); 
-        });
-
+        req.on('end', () => { if (socketBot) cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(b).facturas); res.end("OK"); });
     } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
@@ -237,7 +212,6 @@ const server = http.createServer(async (req, res) => {
             }
             res.end("OK");
         });
-
     } else {
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
         res.end(`<html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><meta http-equiv="refresh" content="10"></head><body class="bg-light text-center">${header}<div class="container"><div class="card shadow p-4 mx-auto" style="max-width:400px;">
@@ -249,29 +223,36 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-// ===== ARRANQUE UNICO Y LIMPIO =====
-// Manejador de errores del servidor ANTES de intentar escuchar
-server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
-        console.error(`!!! CRITICAL: El puerto ${PORT} está bloqueado por otro proceso.`);
-        console.error(`Saliendo para que Render reinicie el contenedor...`);
-        process.exit(1); // Importante: Salir permite que Render limpie el puerto.
+// ===== ARRANQUE DE SERVIDOR (SOLUCIÓN AL PUERTO) =====
+
+// 1. Manejo de errores globales para evitar que el proceso se quede colgado
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`Puerto ${PORT} ocupado. Cerrando proceso para liberar recursos...`);
+        process.exit(1); // Render reiniciará esto automáticamente y limpiará el puerto.
+    } else {
+        console.error('Error en el servidor:', err);
     }
 });
 
-// Escucha única
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`✅ SERVIDOR WEB ONLINE EN PUERTO ${PORT}`);
-    startBot(); // Inicia el bot de WhatsApp solo si el puerto se abrió bien
-    actualizarDolar();
-    setInterval(actualizarDolar, 3600000);
-});
+// 2. Intentar escuchar
+try {
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`✅ Servidor Web OK en Puerto ${PORT}`);
+        // Solo iniciamos el bot y el dolar si el servidor web arrancó con éxito
+        startBot();
+        actualizarDolar();
+        setInterval(actualizarDolar, 3600000);
+    });
+} catch (e) {
+    console.error("No se pudo iniciar el servidor:", e);
+    process.exit(1);
+}
 
-// Gestión de cierre del sistema (libera el puerto al apagar)
+// 3. Limpieza absoluta al apagar
 process.on('SIGTERM', () => {
-    console.log('Cerrando servidor...');
     server.close(() => {
-        console.log('Puerto liberado.');
+        console.log('Proceso terminado limpiamente.');
         process.exit(0);
     });
 });
