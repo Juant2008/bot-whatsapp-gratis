@@ -157,13 +157,10 @@ async function startBot() {
         if (!msg.message || msg.key.remoteJid === 'status@broadcast') return;
 
         const from = msg.key.remoteJid;
-
-        // 1. IGNORAR GRUPOS
         if (from.includes('@g.us')) return;
 
         const tel = from.split('@')[0];
 
-        // 2. CONTROL HUMANO (Si yo escribo, el bot se calla)
         if (msg.key.fromMe) {
             await setModo(tel, 'humano');
             return;
@@ -175,13 +172,11 @@ async function startBot() {
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
         if (!text) return;
 
-        // CONSULTA DOLAR
         if (text.toLowerCase() === 'dolar') {
             await actualizarDolar();
             return await sock.sendMessage(from, { text: `💵 BCV: ${dolarInfo.bcv}\n📈 Paralelo: ${dolarInfo.paralelo}` });
         }
 
-        // IA Y NEGOCIO
         if (!sesion || !sesion.usuario) {
             const cedula = text.replace(/\D/g, '');
             if (cedula.length >= 6) {
@@ -203,7 +198,6 @@ async function startBot() {
             return;
         }
 
-        // IA GEMINI
         try {
             const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
             const result = await model.generateContent(`${inst}\n\nCliente: ${text}`);
@@ -228,14 +222,19 @@ const server = http.createServer(async (req, res) => {
 
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
-        req.on('end', () => { cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(b).facturas); res.end("OK"); });
+        req.on('end', () => { 
+            if (socketBot) cobranza.ejecutarEnvioMasivo(socketBot, JSON.parse(b).facturas); 
+            res.end("OK"); 
+        });
 
     } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
             const data = JSON.parse(b);
-            if (data.tipo === 'precios') await Marketing.enviarCatalogo(socketBot, data.clientes);
-            if (data.tipo === 'promo') await Marketing.enviarPromoPersonalizada(socketBot, data.clientes);
+            if (socketBot) {
+                if (data.tipo === 'precios') await Marketing.enviarCatalogo(socketBot, data.clientes);
+                if (data.tipo === 'promo') await Marketing.enviarPromoPersonalizada(socketBot, data.clientes);
+            }
             res.end("OK");
         });
 
@@ -250,18 +249,37 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-// ESCUCHA DE PUERTO ÚNICA (Render gestiona el reinicio)
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor activo en puerto ${PORT}`);
-    startBot();
-    actualizarDolar();
-    setInterval(actualizarDolar, 3600000);
-});
+// ESCUCHA DE PUERTO CON MANEJO DE ERRORES MEJORADO
+function startServer() {
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`Servidor activo en puerto ${PORT}`);
+        startBot();
+        actualizarDolar();
+        setInterval(actualizarDolar, 3600000);
+    });
 
-// Limpieza al apagar (Evita el puerto ocupado en el siguiente despliegue)
+    server.on('error', (e) => {
+        if (e.code === 'EADDRINUSE') {
+            console.error(`Puerto ${PORT} ocupado. Reintentando en 2 segundos...`);
+            setTimeout(() => {
+                server.close();
+                server.listen(PORT);
+            }, 2000);
+        }
+    });
+}
+
+startServer();
+
+// Gestión de cierre limpia para evitar dejar el puerto ocupado en el próximo despliegue
 process.on('SIGTERM', () => {
+    console.log('Cerrando servidor por instrucción de Render...');
     server.close(() => {
-        console.log('Servidor cerrado correctamente');
+        console.log('Servidor cerrado.');
         process.exit(0);
     });
+});
+
+process.on('SIGINT', () => {
+    server.close(() => process.exit(0));
 });
