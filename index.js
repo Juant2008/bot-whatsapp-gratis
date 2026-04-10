@@ -272,11 +272,17 @@ async function startBot() {
             return await sock.sendMessage(from, { text: listado });
         }
 
-        try {
-            const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
-            const result = await model.generateContent(`${inst}\n\nCliente: ${rawText}`);
-            await sock.sendMessage(from, { text: result.response.text() });
-        } catch (e) {}
+try {
+    const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
+    const respuesta = await generarRespuestaIA(`${inst}\n\nCliente: ${rawText}`);
+    
+    await sock.sendMessage(from, { text: respuesta });
+
+} catch (e) {
+    console.log("🔥 Error final IA:", e.message);
+
+    await sock.sendMessage(from, { 
+        text: "⚠️ El asistente está ocupado en este momento. Intenta nuevamente en unos segundos." 
     });
 }
 
