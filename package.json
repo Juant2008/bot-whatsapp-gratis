@@ -1,5 +1,5 @@
 {
-  "name": "bot-whatsapp",
+  "name": "bot-whatsapp-one4cars",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -11,6 +11,7 @@
     "pino": "^8.19.0",
     "qrcode": "^1.5.3",
     "@google/generative-ai": "^0.11.1",
-    "mysql2": "^3.9.2"
+    "mysql2": "^3.9.2",
+    "axios": "^1.6.0"
   }
 }
