@@ -74,11 +74,17 @@ async function buscarCliente(usuario) {
     return r[0] || null;
 }
 
-async function obtenerSaldo(id) {
+// 🔥 DETERMINA QUÉ FACTURAS MOSTRAR (CORRECCIÓN EBENEZER)
+async function obtenerSaldo(id, diasVencimiento = 0) {
     const conn = await db();
+    // Filtramos factura por factura usando DATEDIFF
+    // Si pides facturas de >60 días, la de 24 días será ignorada en la suma
     const [r] = await conn.execute(
-        "SELECT SUM(total - abono_factura) saldo FROM tab_facturas WHERE id_cliente=? AND pagada='NO'",
-        [id]
+        `SELECT SUM(total - abono_factura) as saldo 
+         FROM tab_facturas 
+         WHERE id_cliente=? AND pagada='NO' AND anulado='no' 
+         AND DATEDIFF(CURDATE(), fecha_reg) >= ?`,
+        [id, diasVencimiento]
     );
     await conn.end();
     return r[0].saldo || 0;
@@ -93,7 +99,6 @@ async function getChats() {
 
 // ===== BOT =====
 async function startBot() {
-
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
@@ -104,40 +109,25 @@ async function startBot() {
     });
 
     sockGlobal = sock;
-
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (u) => {
         const { connection, lastDisconnect, qr } = u;
-
-        if (qr) {
-            qrcode.toDataURL(qr, (_, url) => qrCodeData = url);
-        }
-
-        if (connection === 'open') {
-            qrCodeData = "ONLINE ✅";
-            console.log("CONECTADO");
-        }
-
+        if (qr) qrcode.toDataURL(qr, (_, url) => qrCodeData = url);
+        if (connection === 'open') { qrCodeData = "ONLINE ✅"; }
         if (connection === 'close') {
-            const shouldReconnect =
-                (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-
+            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) setTimeout(startBot, 5000);
         }
     });
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
-
         const msg = messages[0];
         if (!msg.message) return;
-
         const from = msg.key.remoteJid;
         if (from.includes('@g.us')) return;
-
         const tel = from.split('@')[0];
 
-        // SI ES TUYO → MODO HUMANO
         if (msg.key.fromMe) {
             await setModo(tel, 'humano');
             return;
@@ -147,112 +137,70 @@ async function startBot() {
         if (!text) return;
 
         const sesion = await getSesion(tel);
-
         if (sesion && sesion.modo === 'humano') return;
 
-        // SALUDO
         if (!sesion) {
-            await sock.sendMessage(from, {
-                text: "👋 Bienvenido a ONE4CARS 🚗\n\nEnvíe su RIF o escriba *menu*"
-            });
+            await sock.sendMessage(from, { text: "👋 Bienvenido a ONE4CARS 🚗\n\nEnvíe su RIF o escriba *menu*" });
+            await setModo(tel, 'bot'); return;
         }
 
-        // MENU
         if (text.toLowerCase().includes("menu")) {
-            await sock.sendMessage(from, {
-                text: "📋 MENÚ:\n1 Pagos\n2 Estado de cuenta\n3 Precios\n4 Pedidos\n6 Registro\n8 Despacho"
-            });
+            await sock.sendMessage(from, { text: "📋 MENÚ:\n1 Pagos\n2 Estado de cuenta\n3 Precios\n4 Pedidos\n6 Registro\n8 Despacho" });
             return;
         }
 
-        // IDENTIFICAR CLIENTE
-        if (!sesion || !sesion.usuario) {
+        if (!sesion.usuario) {
             const cedula = limpiarCedula(text);
-
             if (cedula.length >= 6) {
                 const cliente = await buscarCliente(cedula);
-
                 if (cliente) {
                     await guardarUsuario(tel, cedula);
-
-                    await sock.sendMessage(from, {
-                        text: `Hola ${cliente.nombres} 👋\nEscriba *saldo* para consultar`
-                    });
+                    await sock.sendMessage(from, { text: `Hola ${cliente.nombres} 👋\nEscriba *saldo* para consultar` });
                     return;
                 }
             }
-
-            await sock.sendMessage(from, {
-                text: "🔐 Envíe su RIF para continuar"
-            });
+            await sock.sendMessage(from, { text: "🔐 Envíe su RIF para continuar" });
             return;
         }
 
         const cliente = await buscarCliente(sesion.usuario);
 
-        // SALDO
         if (text.toLowerCase().includes("saldo")) {
-            const saldo = await obtenerSaldo(cliente.id_cliente);
-
-            await sock.sendMessage(from, {
-                text: `💰 Su saldo es: $${saldo.toFixed(2)}`
-            });
+            // Aquí traemos el saldo que tenga al menos 1 día de emitida (puedes cambiar el 0 por 60 si quieres el reporte de mora)
+            const saldo = await obtenerSaldo(cliente.id_cliente, 0);
+            await sock.sendMessage(from, { text: `💰 Su saldo pendiente es: $${saldo.toFixed(2)}` });
             return;
         }
 
-        // IA
         try {
             const instrucciones = fs.readFileSync('./instrucciones.txt', 'utf8');
-
-            const chat = model.startChat({
-                history: [{ role: "user", parts: [{ text: instrucciones }] }]
-            });
-
+            const chat = model.startChat({ history: [{ role: "user", parts: [{ text: instrucciones }] }] });
             const r = await chat.sendMessage(text);
             await sock.sendMessage(from, { text: r.response.text() });
-
         } catch {
             await sock.sendMessage(from, { text: "⚠️ Error, escriba menu." });
         }
-
     });
 }
 
-// ===== SERVER =====
-const server = http.createServer(async (req, res) => {
+// Exportamos las funciones para que index.js las use sin duplicar el servidor
+module.exports = { startBot, obtenerSaldo, buscarCliente };
 
-    const parsed = url.parse(req.url, true);
+// 🔥 IMPORTANTE: Si este archivo se ejecuta solo (node cobranza.js), arranca el servidor.
+// Si se importa desde index.js, no arranca un segundo servidor (evita el error EADDRINUSE).
+if (require.main === module) {
+    const server = http.createServer(async (req, res) => {
+        const parsed = url.parse(req.url, true);
+        if (parsed.pathname === '/panel') {
+            const chats = await getChats();
+            res.end(`<h2>Panel</h2>${chats.map(c => `<p>${c.telefono} - ${c.modo}</p>`).join('')}`);
+            return;
+        }
+        res.end(`<h2>BOT ONLINE</h2>${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" width="250">` : `<h3>${qrCodeData}</h3>`}`);
+    });
 
-    if (parsed.pathname === '/panel') {
-        const chats = await getChats();
-
-        res.end(`
-        <h2>Panel</h2>
-        ${chats.map(c => `
-        <p>${c.telefono} - ${c.modo}
-        <a href="/modo?tel=${c.telefono}&modo=${c.modo === 'bot' ? 'humano' : 'bot'}">Cambiar</a>
-        </p>
-        `).join('')}
-        `);
-        return;
-    }
-
-    if (parsed.pathname === '/modo') {
-        await setModo(parsed.query.tel, parsed.query.modo);
-        res.end("OK");
-        return;
-    }
-
-    res.end(`
-    <h2>ONE4CARS BOT</h2>
-    ${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" width="250">` : `<h3>${qrCodeData}</h3>`}
-    <br><a href="/panel">Panel</a>
-    `);
-
-});
-
-// 🔥 IMPORTANTE: SOLO UNA VEZ
-server.listen(PORT, () => {
-    console.log("Servidor corriendo en puerto", PORT);
-    startBot();
-});
+    server.listen(PORT, () => {
+        console.log("Servidor cobranza corriendo en puerto", PORT);
+        startBot();
+    });
+}
