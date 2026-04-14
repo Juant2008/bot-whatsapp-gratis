@@ -296,13 +296,13 @@ async function startBot() {
                     const facturas = await obtenerDetalleFacturas(c.id_cliente);
                     let totalP = 0; let list = `⭐ *CONSULTA MASTER*\nCliente: ${c.nombres}\n\n`;
                     if (facturas.length === 0) list += `? *Total: $0.00*`;
-                    facturas.forEach(f => {
-                        const monto = (f.total - f.abono_factura) / (f.porcentaje || 1);
-                        totalP += monto;
-                        const fReg = new Date(f.fecha_reg).toISOString().split('T')[0];
-                        const params = `id_factura=${f.id_factura}&nro_factura=${f.nro_factura}&fecha_reg=${fReg}&total=${f.total}&abono_factura=${f.abono_factura}&nombres=${encodeURIComponent(f.nombres.trim())}&nombre=${encodeURIComponent(f.nombre_vendedor.trim())}&direccion=${encodeURIComponent(f.direccion.trim())}&cedula=${f.cedula.trim()}&celular=${encodeURIComponent(f.celular.trim())}&telefono=${encodeURIComponent(f.telefono.trim())}&id_cliente=${f.id_cliente}&zona=${encodeURIComponent(f.zona.trim())}&descuento=${f.descuento}&total_desc=${f.total_desc}`;
-                        list += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n✍️ Firmada: https://www.one4cars.com/sevencorpweb/uploads/notas/${f.nro_factura}.jpg\n📄 PDF: https://one4cars.com/sevencorp/factura_full_reporte_web.php?${params}\n\n`;
-                    });
+facturas.forEach(f => {
+    const monto = (f.total - f.abono_factura) / (f.porcentaje || 1);
+    totalP += monto;
+    const fReg = new Date(f.fecha_reg).toISOString().split('T')[0];
+    const params = `id_factura=${f.id_factura}&nro_factura=${f.nro_factura}&fecha_reg=${fReg}&total=${f.total}&abono_factura=${f.abono_factura}&nombres=${encodeURIComponent(f.nombres.trim())}&nombre=${encodeURIComponent(f.nombre_vendedor.trim())}&direccion=${encodeURIComponent(f.direccion.trim())}&cedula=${f.cedula.trim()}&celular=${encodeURIComponent(f.celular.trim())}&telefono=${encodeURIComponent(f.telefono.trim())}&id_cliente=${f.id_cliente}&zona=${encodeURIComponent(f.zona.trim())}&descuento=${f.descuento}&total_desc=${f.total_desc}`;
+    list += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n✍️ Firmada: https://www.one4cars.com/sevencorpweb/uploads/notas/${f.nro_factura}.jpg\n\n`;
+});
                     if (totalP > 0) list += `💰 *Total Máster: $${totalP.toFixed(2)}*`;
                     return await sock.sendMessage(from, { text: list });
                 }
