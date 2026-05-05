@@ -1,5 +1,22 @@
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
+const qrcode = require('qrcode');
+const http = require('http');
+const url = require('url');
+const pino = require('pino');
+const fs = require('fs');
 const mysql = require('mysql2/promise');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
+// ===== CONFIG =====
+const PORT = process.env.PORT || 10000;
+const apiKey = process.env.GEMINI_API_KEY || "";
+
+// ===== IA =====
+const genAI = new GoogleGenerativeAI(apiKey);
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+// ===== DB =====
 const dbConfig = {
     host: 'one4cars.com',
     user: 'juant200_one4car',
@@ -7,99 +24,235 @@ const dbConfig = {
     database: 'juant200_venezon'
 };
 
-async function obtenerVendedores() {
-    const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute("SELECT DISTINCT vendedor FROM tab_clientes WHERE vendedor != '' ORDER BY vendedor ASC");
-    await conn.end();
-    return rows;
+// ===== VARIABLES =====
+let qrCodeData = "Iniciando...";
+let sockGlobal = null;
+
+// ===== HELPERS =====
+function limpiarCedula(texto) {
+    return texto.replace(/\D/g, '');
 }
 
-async function obtenerZonas() {
-    const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute("SELECT DISTINCT zona FROM tab_clientes WHERE zona != '' ORDER BY zona ASC");
-    await conn.end();
-    return rows;
+async function db() {
+    return await mysql.createConnection(dbConfig);
 }
 
-async function buscarCliente(rif) {
-    const conn = await mysql.createConnection(dbConfig);
-    const [r] = await conn.execute("SELECT id_cliente, nombres FROM tab_clientes WHERE clave LIKE ? LIMIT 1", [`%${rif}%`]);
+async function getSesion(tel) {
+    const conn = await db();
+    const [r] = await conn.execute("SELECT * FROM control_chat WHERE telefono=?", [tel]);
     await conn.end();
     return r[0] || null;
 }
 
-async function obtenerDetalleFacturasMaster(id) {
-    const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute("SELECT * FROM tab_facturas WHERE id_cliente=? AND pagada='NO' AND anulado='no'", [id]);
+async function setModo(tel, modo) {
+    const conn = await db();
+    await conn.execute(`
+        INSERT INTO control_chat (telefono, modo)
+        VALUES (?,?)
+        ON DUPLICATE KEY UPDATE modo=VALUES(modo)
+    `, [tel, modo]);
     await conn.end();
-    return rows;
 }
 
-// 🔥 FIX EBENEZER + FILTRO ZONA + DÍAS MANUALES
-async function obtenerListaDeudores(filtros) {
-    const conn = await mysql.createConnection(dbConfig);
-    let dias = parseInt(filtros.dias) || 0; // Días manuales desde el input
-    
-    let sql = `
-        SELECT c.id_cliente, c.nombres, c.celular, c.zona, c.vendedor,
-               GROUP_CONCAT(f.nro_factura SEPARATOR ', ') as nros,
-               MAX(DATEDIFF(CURDATE(), f.fecha_reg)) as max_dias,
-               SUM((f.total - f.abono_factura) / f.porcentaje) as total_deuda
-        FROM tab_facturas f
-        JOIN tab_clientes c ON f.id_cliente = c.id_cliente
-        WHERE f.pagada = 'NO' AND f.anulado = 'no'
-        AND DATEDIFF(CURDATE(), f.fecha_reg) >= ?
-    `;
-    
-    let params = [dias];
-
-    if (filtros.vendedor) {
-        sql += " AND c.vendedor = ?";
-        params.push(filtros.vendedor);
-    }
-    if (filtros.zona) {
-        sql += " AND c.zona = ?";
-        params.push(filtros.zona);
-    }
-
-    sql += " GROUP BY c.id_cliente ORDER BY max_dias DESC";
-
-    const [rows] = await conn.execute(sql, params);
+async function guardarUsuario(tel, usuario) {
+    const conn = await db();
+    await conn.execute(`
+        INSERT INTO control_chat (telefono, usuario, modo)
+        VALUES (?,?, 'bot')
+        ON DUPLICATE KEY UPDATE usuario=VALUES(usuario)
+    `, [tel, usuario]);
     await conn.end();
-    return rows;
 }
 
-async function generarHTML(v, z, d, header, q) {
-    return `<!DOCTYPE html><html><head><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"></head>
-    <body class="bg-light">${header}<div class="container">
-    <h3>Panel de Cobranza</h3>
-    <form class="row g-2 mb-4" method="GET" action="/cobranza">
-        <div class="col-md-2">
-            <label class="small">Días Mora (Mínimo):</label>
-            <input type="number" name="dias" class="form-control" value="${q.dias || 0}" placeholder="Ej: 60">
-        </div>
-        <div class="col-md-3">
-            <label class="small">Vendedor:</label>
-            <select name="vendedor" class="form-select">
-                <option value="">Todos</option>
-                ${v.map(sel => `<option value="${sel.vendedor}" ${q.vendedor === sel.vendedor ? 'selected' : ''}>${sel.vendedor}</option>`).join('')}
-            </select>
-        </div>
-        <div class="col-md-3">
-            <label class="small">Zona:</label>
-            <select name="zona" class="form-select">
-                <option value="">Todas</option>
-                ${z.map(zona => `<option value="${zona.zona}" ${q.zona === zona.zona ? 'selected' : ''}>${zona.zona}</option>`).join('')}
-            </select>
-        </div>
-        <div class="col-md-2 d-flex align-items-end">
-            <button type="submit" class="btn btn-primary w-100">Filtrar</button>
-        </div>
-    </form>
-    <table class="table bg-white shadow-sm table-hover">
-        <thead class="table-dark"><tr><th>Cliente</th><th>Zona</th><th>Facturas</th><th>Mora Máx</th><th>Total Vencido</th></tr></thead>
-        <tbody>${d.map(r=>`<tr><td>${r.nombres}</td><td>${r.zona}</td><td>${r.nros}</td><td>${r.max_dias} días</td><td>$${r.total_deuda.toFixed(2)}</td></tr>`).join('')}</tbody>
-    </table></div></body></html>`;
+async function buscarCliente(usuario) {
+    const conn = await db();
+    const [r] = await conn.execute(
+        "SELECT id_cliente, nombres FROM tab_clientes WHERE usuario=? LIMIT 1",
+        [usuario]
+    );
+    await conn.end();
+    return r[0] || null;
 }
 
-module.exports = { obtenerVendedores, obtenerZonas, obtenerListaDeudores, generarHTML, buscarCliente, obtenerDetalleFacturasMaster };
+async function obtenerSaldo(id) {
+    const conn = await db();
+    const [r] = await conn.execute(
+        "SELECT SUM(total - abono_factura) saldo FROM tab_facturas WHERE id_cliente=? AND pagada='NO'",
+        [id]
+    );
+    await conn.end();
+    return r[0].saldo || 0;
+}
+
+async function getChats() {
+    const conn = await db();
+    const [r] = await conn.execute("SELECT * FROM control_chat ORDER BY updated_at DESC");
+    await conn.end();
+    return r;
+}
+
+// ===== BOT =====
+async function startBot() {
+
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+        version,
+        auth: state,
+        logger: pino({ level: 'silent' })
+    });
+
+    sockGlobal = sock;
+
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', (u) => {
+        const { connection, lastDisconnect, qr } = u;
+
+        if (qr) {
+            qrcode.toDataURL(qr, (_, url) => qrCodeData = url);
+        }
+
+        if (connection === 'open') {
+            qrCodeData = "ONLINE ✅";
+            console.log("CONECTADO");
+        }
+
+        if (connection === 'close') {
+            const shouldReconnect =
+                (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+
+            if (shouldReconnect) setTimeout(startBot, 5000);
+        }
+    });
+
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+
+        const msg = messages[0];
+        if (!msg.message) return;
+
+        const from = msg.key.remoteJid;
+        if (from.includes('@g.us')) return;
+
+        const tel = from.split('@')[0];
+
+        // SI ES TUYO → MODO HUMANO
+        if (msg.key.fromMe) {
+            await setModo(tel, 'humano');
+            return;
+        }
+
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+        if (!text) return;
+
+        const sesion = await getSesion(tel);
+
+        if (sesion && sesion.modo === 'humano') return;
+
+        // SALUDO
+        if (!sesion) {
+            await sock.sendMessage(from, {
+                text: "👋 Bienvenido a ONE4CARS 🚗\n\nEnvíe su RIF o escriba *menu*"
+            });
+        }
+
+        // MENU
+        if (text.toLowerCase().includes("menu")) {
+            await sock.sendMessage(from, {
+                text: "📋 MENÚ:\n1 Pagos\n2 Estado de cuenta\n3 Precios\n4 Pedidos\n6 Registro\n8 Despacho"
+            });
+            return;
+        }
+
+        // IDENTIFICAR CLIENTE
+        if (!sesion || !sesion.usuario) {
+            const cedula = limpiarCedula(text);
+
+            if (cedula.length >= 6) {
+                const cliente = await buscarCliente(cedula);
+
+                if (cliente) {
+                    await guardarUsuario(tel, cedula);
+
+                    await sock.sendMessage(from, {
+                        text: `Hola ${cliente.nombres} 👋\nEscriba *saldo* para consultar`
+                    });
+                    return;
+                }
+            }
+
+            await sock.sendMessage(from, {
+                text: "🔐 Envíe su RIF para continuar"
+            });
+            return;
+        }
+
+        const cliente = await buscarCliente(sesion.usuario);
+
+        // SALDO
+        if (text.toLowerCase().includes("saldo")) {
+            const saldo = await obtenerSaldo(cliente.id_cliente);
+
+            await sock.sendMessage(from, {
+                text: `💰 Su saldo es: $${saldo.toFixed(2)}`
+            });
+            return;
+        }
+
+        // IA
+        try {
+            const instrucciones = fs.readFileSync('./instrucciones.txt', 'utf8');
+
+            const chat = model.startChat({
+                history: [{ role: "user", parts: [{ text: instrucciones }] }]
+            });
+
+            const r = await chat.sendMessage(text);
+            await sock.sendMessage(from, { text: r.response.text() });
+
+        } catch {
+            await sock.sendMessage(from, { text: "⚠️ Error, escriba menu." });
+        }
+
+    });
+}
+
+// ===== SERVER =====
+const server = http.createServer(async (req, res) => {
+
+    const parsed = url.parse(req.url, true);
+
+    if (parsed.pathname === '/panel') {
+        const chats = await getChats();
+
+        res.end(`
+        <h2>Panel</h2>
+        ${chats.map(c => `
+        <p>${c.telefono} - ${c.modo}
+        <a href="/modo?tel=${c.telefono}&modo=${c.modo === 'bot' ? 'humano' : 'bot'}">Cambiar</a>
+        </p>
+        `).join('')}
+        `);
+        return;
+    }
+
+    if (parsed.pathname === '/modo') {
+        await setModo(parsed.query.tel, parsed.query.modo);
+        res.end("OK");
+        return;
+    }
+
+    res.end(`
+    <h2>ONE4CARS BOT</h2>
+    ${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" width="250">` : `<h3>${qrCodeData}</h3>`}
+    <br><a href="/panel">Panel</a>
+    `);
+
+});
+
+// 🔥 IMPORTANTE: SOLO UNA VEZ
+server.listen(PORT, () => {
+    console.log("Servidor corriendo en puerto", PORT);
+    startBot();
+});
