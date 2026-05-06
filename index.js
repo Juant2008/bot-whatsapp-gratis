@@ -177,22 +177,20 @@ async function buscarCliente(rifLimpio) {
     return r[0] || null;
 }
 
-// BÚSQUEDA DE PRODUCTOS EN tab_productos
+// BÚSQUEDA DE PRODUCTOS (Prioridad de palabras clave)
 async function buscarProductoPorTexto(texto) {
-    const stopWords = ['tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde', 'precio', 'tienen', 'el', 'una', 'un', 'polea', 'corsa'];
-    const palabras = normalizar(texto)
-        .split(' ')
-        .filter(p => p.length > 2 && !stopWords.includes(p));
+    const txtNormal = normalizar(texto);
+    const stopWords = ['tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde', 'precio', 'tienen', 'el', 'una', 'un', 'hay'];
     
-    // Si el texto es corto pero contiene palabras clave, las mantenemos
-    const palabrasClave = normalizar(texto).split(' ').filter(p => p.length >= 3);
+    const palabras = txtNormal.split(' ')
+        .filter(p => p.length > 2 && !stopWords.includes(p));
         
-    if (palabrasClave.length === 0) return null;
+    if (palabras.length === 0) return null;
 
     const conn = await db();
     let query = "SELECT producto, descripcion, tipo FROM tab_productos WHERE ";
-    let conditions = palabrasClave.map(() => "descripcion LIKE ?").join(" AND ");
-    let params = palabrasClave.map(p => `%${p}%`);
+    let conditions = palabras.map(() => "descripcion LIKE ?").join(" AND ");
+    let params = palabras.map(p => `%${p}%`);
 
     try {
         const [rows] = await conn.execute(query + conditions + " LIMIT 5", params);
@@ -281,14 +279,43 @@ async function startBot() {
         if (!rawText) return;
 
         const text = normalizar(rawText);
-        const soloNumeros = rawText.replace(/\s/g, ''); // Para detectar RIF puro
+        const soloNumeros = rawText.replace(/\s/g, ''); 
 
         await guardarMensaje(from, 'user', rawText);
 
         const sesion = await getSesion(from);
         if (sesion && sesion.modo === 'humano' && !isAdmin) return;
 
-        // --- 1. COMANDOS DE ADMINISTRADOR (EXACTOS) ---
+        // --- 1. LÓGICA DE PRODUCTOS (PRIORIDAD ALTA PARA TODOS, INCLUYENDO JEFE) ---
+        // Si el texto contiene palabras clave pero NO es un RIF puro
+        const esRIFPuro = soloNumeros.length >= 6 && /^\d+$/.test(soloNumeros);
+        const palabrasClaveProd = ["tienes", "hay", "polea", "corsa", "bomba", "filtro", "disponible", "precio"];
+        const pareceConsultaProd = palabrasClaveProd.some(p => text.includes(p));
+
+        if (pareceConsultaProd && !esRIFPuro) {
+            try {
+                const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
+                const historial = await obtenerHistorial(from);
+                let dataProductos = "";
+                const prods = await buscarProductoPorTexto(rawText);
+                if (prods) {
+                    dataProductos = "\n\nSTOCK ENCONTRADO EN TABLA PRODUCTOS:\n";
+                    prods.forEach(p => {
+                        dataProductos += `- CÓDIGO: ${p.producto} | TIPO: ${p.tipo} | DESC: ${p.descripcion}\n`;
+                        dataProductos += `- FICHA: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
+                    });
+                    dataProductos += "Informa que el producto está disponible y adjunta el link de la ficha técnica.";
+                }
+
+                const prompt = `INSTRUCCIONES:\n${inst}\n\nCONTEXTO:\nDólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\nUsuario: ${pushName}${dataProductos}\n\nHISTORIAL:\n${historial}\n\nMENSAJE: ${rawText}`;
+                const result = await model.generateContent(prompt);
+                const rIA = result.response.text();
+                await guardarMensaje(from, 'model', rIA);
+                return await sock.sendMessage(from, { text: rIA });
+            } catch (e) { console.log("Error en búsqueda IA"); }
+        }
+
+        // --- 2. COMANDOS DE ADMINISTRADOR ---
         if (isAdmin) {
             if (text === 'dolar') {
                 await actualizarDolar();
@@ -297,8 +324,7 @@ async function startBot() {
             if (text === 'menu' || text === 'hola' || text === 'buen dia') {
                 return await sock.sendMessage(from, { text: `⭐ *MODO ADMINISTRADOR*\n\n${MENU_TEXT}` });
             }
-            // CONSULTA RIF (Solo si el mensaje es meramente numérico)
-            if (soloNumeros.length >= 6 && /^\d+$/.test(soloNumeros)) {
+            if (esRIFPuro) {
                 const c = await buscarCliente(soloNumeros);
                 if (c) {
                     const facturas = await obtenerDetalleFacturas(c.id_cliente);
@@ -316,17 +342,17 @@ async function startBot() {
                     }
                     return await sock.sendMessage(from, { text: list });
                 } else {
-                    return await sock.sendMessage(from, { text: "❌ No se encontró ningún cliente con ese RIF/Cédula." });
+                    return await sock.sendMessage(from, { text: "❌ No se encontró cliente con ese RIF." });
                 }
             }
         }
 
-        // --- 2. FLUJO VENDEDOR / CLIENTE (VINCULACIÓN) ---
+        // --- 3. VENDEDOR / CLIENTE (RESTO DE LÓGICA) ---
         if (vendedor && (text === 'menu' || text === 'hola')) {
             return await sock.sendMessage(from, { text: `👋 Hola *${vendedor.nombre}*.\n\n${MENU_TEXT}` });
         }
 
-        if (soloNumeros.length >= 6 && /^\d+$/.test(soloNumeros) && (!sesion || !sesion.id_cliente_int) && !isAdmin) {
+        if (esRIFPuro && (!sesion || !sesion.id_cliente_int) && !isAdmin) {
             const c = await buscarCliente(soloNumeros);
             if (c) {
                 await guardarUsuario(from, soloNumeros, c.id_cliente);
@@ -353,30 +379,15 @@ async function startBot() {
             return await sock.sendMessage(from, { text: listado });
         }
 
-        // --- 3. LÓGICA DE IA Y BÚSQUEDA DE PRODUCTOS (PARA TODOS) ---
+        // --- 4. FALLBACK IA (SI NADA DE LO ANTERIOR COINCIDIÓ) ---
         try {
             const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
-            const historial = await obtenerHistorial(from);
-            
-            let dataProductos = "";
-            // Buscamos productos si hay texto descriptivo
-            const prods = await buscarProductoPorTexto(rawText);
-            if (prods) {
-                dataProductos = "\n\nRESULTADOS EN TABLA PRODUCTOS:\n";
-                prods.forEach(p => {
-                    dataProductos += `- CÓDIGO: ${p.producto} | TIPO: ${p.tipo} | DESC: ${p.descripcion}\n`;
-                    dataProductos += `- LINK: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
-                });
-                dataProductos += "Confirma al usuario que sí tenemos el producto y proporciónale el link técnico.";
-            }
-
-            const prompt = `INSTRUCCIONES:\n${inst}\n\nCONTEXTO:\nDólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\nUsuario: ${pushName}${dataProductos}\n\nHISTORIAL:\n${historial}\n\nMENSAJE: ${rawText}`;
-            
+            const prompt = `INSTRUCCIONES:\n${inst}\n\nDólar: ${dolarInfo.bcv}\nUsuario: ${pushName}\n\nMENSAJE: ${rawText}`;
             const result = await model.generateContent(prompt);
             const rIA = result.response.text();
             await guardarMensaje(from, 'model', rIA);
             await sock.sendMessage(from, { text: rIA });
-        } catch (e) { console.log("Error en Gemini/Búsqueda"); }
+        } catch (e) {}
     });
 }
 
@@ -390,14 +401,12 @@ const server = http.createServer(async (req, res) => {
         const z = await cobranza.obtenerZonas();
         const d = await cobranza.obtenerListaDeudores(parsedUrl.query);
         res.end(await cobranza.generarHTML(v, z, d, header, parsedUrl.query));
-
     } else if (parsedUrl.pathname === '/marketing-panel') {
         const v = await marketingModulo.obtenerVendedores();
         const z = await marketingModulo.obtenerZonas();
         const c = await marketingModulo.obtenerClientesMarketing(parsedUrl.query);
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
         res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, parsedUrl.query));
-
     } else if (parsedUrl.pathname === '/marketing-preview') {
         const conn = await db();
         let sql = "SELECT id_cliente, nombres, celular FROM tab_clientes WHERE celular IS NOT NULL AND celular != ''";
@@ -408,7 +417,6 @@ const server = http.createServer(async (req, res) => {
         await conn.end();
         res.writeHead(200, {'Content-Type': 'application/json'});
         res.end(JSON.stringify(clientes));
-
     } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
@@ -428,12 +436,11 @@ const server = http.createServer(async (req, res) => {
                             await socketBot.sendMessage(jid, { text: data.mensaje });
                         }
                         await randomDelay();
-                    } catch (e) { console.log("Error envío masivo"); }
+                    } catch (e) {}
                 }
             }
             res.end("OK");
         });
-
     } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
@@ -456,7 +463,6 @@ const server = http.createServer(async (req, res) => {
             }
             res.end("OK");
         });
-
     } else {
         res.end(`<!DOCTYPE html>
         <html lang="es">
