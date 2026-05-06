@@ -20,7 +20,7 @@ const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({ 
     model: "gemini-1.5-flash", 
-    generationConfig: { temperature: 0.1, maxOutputTokens: 1000 } // Temperatura muy baja para máxima precisión
+    generationConfig: { temperature: 0.1, maxOutputTokens: 1000 } 
 });
 
 const pool = mysql.createPool({
@@ -172,7 +172,6 @@ async function buscarProductoPorTexto(texto) {
         
     if (palabras.length === 0) return null;
 
-    // SELECCIONAMOS precio_minimo EXPLÍCITAMENTE
     let query = "SELECT producto, descripcion, tipo, precio_minimo FROM tab_productos WHERE ";
     
     let conditions = palabras.map(() => "descripcion LIKE ?").join(" AND ");
@@ -293,16 +292,17 @@ async function startBot() {
                     
                     let dataProductos = "\n\nDATOS REALES DE STOCK:\n";
                     prods.forEach(p => {
-                        dataProductos += `CÓDIGO: ${p.producto} | TIPO: ${p.tipo} | DESCRIPCIÓN: ${p.descripcion} | PRECIO MÍNIMO: $${p.precio_minimo} | LINK: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n`;
+                        // FORMATEO A 2 DECIMALES AQUÍ
+                        const precioLimpio = parseFloat(p.precio_minimo || 0).toFixed(2);
+                        dataProductos += `CÓDIGO: ${p.producto} | TIPO: ${p.tipo} | DESCRIPCIÓN: ${p.descripcion} | PRECIO MÍNIMO: $${precioLimpio} | LINK: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n`;
                     });
                     
-                    // REGLA DE HIERRO PARA LA IA
-                    dataProductos += `\n\n⚠️ REGLA OBLIGATORIA: El cliente pregunta "${rawText}". 
-                    1. Debes decir si el producto está disponible basándote en la DESCRIPCIÓN.
-                    2. DEBES mostrar el PRECIO MÍNIMO de cada producto. NO LO OMITAS.
-                    3. Si el producto tiene medidas (ej: 70x26x17), menciónalas.
-                    4. SIEMPRE termina con el LINK de la ficha técnica.
-                    5. Si no pones el precio, la respuesta se considera incorrecta.`;
+                    dataProductos += `\n\n⚠️ REGLA OBLIGATORIA DE FORMATO:
+                    1. Debes decir si el producto está disponible.
+                    2. EL PRECIO DEBE SER LLAMATIVO. Usa este formato exacto: *💰 Precio: $XX.XX* (en negrita y con emoji).
+                    3. Usa solo 2 decimales para el precio.
+                    4. Si el producto tiene medidas, menciónalas.
+                    5. SIEMPRE termina con el LINK de la ficha técnica.`;
 
                     const prompt = `INSTRUCCIONES:\n${inst}\n\nCONTEXTO:\nDólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\nUsuario: ${pushName}${dataProductos}\n\nHISTORIAL:\n${historial}\n\nMENSAJE: ${rawText}`;
                     
@@ -315,7 +315,8 @@ async function startBot() {
                         console.log(`[IA] ❌ Error en Gemini, usando respuesta de emergencia...`);
                         let emergencyMsg = `✅ ¡Hola ${pushName}! Tenemos productos relacionados:\n\n`;
                         prods.forEach(p => {
-                            emergencyMsg += `📦 *${p.descripcion}*\n💰 Precio: $${p.precio_minimo}\n🔗 Ficha técnica: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
+                            const precioLimpio = parseFloat(p.precio_minimo || 0).toFixed(2);
+                            emergencyMsg += `📦 *${p.descripcion}*\n💰 *Precio: $${precioLimpio}*\n🔗 Ficha técnica: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
                         });
                         return await safeSendMessage(from, { text: emergencyMsg });
                     }
