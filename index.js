@@ -19,7 +19,7 @@ const apiKey = process.env.GEMINI_API_KEY;
 
 const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.5-flash", // MODELO SOLICITADO
+    model: "gemini-2.0-flash", // MODELO ESTABLE
     generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
 });
 
@@ -178,9 +178,14 @@ async function buscarCliente(rifLimpio) {
     return r[0] || null;
 }
 
-// NUEVA FUNCIÓN: Búsqueda en tab_productos
+// BUSQUEDA MEJORADA EN tab_productos
 async function buscarProductoPorTexto(texto) {
-    const palabras = normalizar(texto).split(' ').filter(p => p.length > 2);
+    // Quitamos palabras comunes que ensucian la búsqueda
+    const stopWords = ['tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde', 'precio'];
+    const palabras = normalizar(texto)
+        .split(' ')
+        .filter(p => p.length > 2 && !stopWords.includes(p));
+        
     if (palabras.length === 0) return null;
 
     const conn = await db();
@@ -287,7 +292,7 @@ async function startBot() {
         const sesion = await getSesion(from);
         if (sesion && sesion.modo === 'humano' && !isAdmin) return;
 
-        // ⭐ 3. LÓGICA DE ADMINISTRADOR MAESTRO (EL JEFE)
+        // ⭐ 3. LÓGICA DE ADMINISTRADOR MAESTRO
         if (isAdmin) {
             const fechaHora = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
             const saludoJefe = `⭐ *HOLA JEFE / ADMINISTRADOR*\n\nBienvenido de nuevo. Hoy es ${fechaHora}.\n\n*Tasas:* BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\n\nUsted tiene acceso total. Puede enviar cualquier RIF para consultar el estado de cuenta de un cliente o escribir *menu* para ver las opciones del sistema.`;
@@ -301,7 +306,7 @@ async function startBot() {
                 return await sock.sendMessage(from, { text: saludoJefe });
             }
 
-            // Consulta RIF Master corregida (Eliminada opción VER)
+            // CONSULTA RIF ADMINISTRADOR (Solo link de Firmada)
             if (rifDetectado.length >= 6 && /^\d+$/.test(rawText.replace(/\s/g, ''))) {
                 const c = await buscarCliente(rifDetectado);
                 if (c) {
@@ -359,36 +364,36 @@ async function startBot() {
             return await sock.sendMessage(from, { text: listado });
         }
 
-        // 🤖 4. IA GEMINI CON BÚSQUEDA DE PRODUCTOS INTEGRADA
+        // 🤖 4. IA GEMINI CON BÚSQUEDA DE PRODUCTOS
         try {
             const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
             const historial = await obtenerHistorial(from);
             
-            // Inyectar búsqueda de productos en el contexto de la IA
-            let contextoProductos = "";
-            if (text.length > 4 && !isAdmin && !text.includes("saldo")) {
-                const prods = await buscarProductoPorTexto(rawText);
-                if (prods) {
-                    contextoProductos = "\n\nPRODUCTOS ENCONTRADOS EN NUESTRA BASE DE DATOS:\n";
-                    prods.forEach(p => {
-                        contextoProductos += `- Código: ${p.producto} | Tipo: ${p.tipo} | Descripción: ${p.descripcion}\n`;
-                        contextoProductos += `- Ficha técnica: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n`;
+            // BUSCAR PRODUCTOS SIEMPRE QUE EL TEXTO SEA RELEVANTE (Mínimo 3 letras)
+            let dataProductos = "";
+            if (text.length > 3 && !text.includes("saldo")) {
+                const results = await buscarProductoPorTexto(rawText);
+                if (results) {
+                    dataProductos = "\n\nRESULTADOS DE NUESTRO ALMACÉN (tab_productos):\n";
+                    results.forEach(p => {
+                        dataProductos += `- CÓDIGO: ${p.producto} | DESCRIPCIÓN: ${p.descripcion} | TIPO: ${p.tipo}\n`;
+                        dataProductos += `- LINK TÉCNICO: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
                     });
-                    contextoProductos += "\nUsa esta información técnica para responder al cliente. Si el cliente pregunta medidas, están en la descripción. Menciona siempre el link de la ficha técnica.";
+                    dataProductos += "Usa estos datos para confirmar disponibilidad. Si preguntan medidas, léelas de la descripción. Envía siempre el LINK TÉCNICO correspondiente.";
                 }
             }
 
-            const prompt = `INSTRUCCIONES:\n${inst}\n\nCONTEXTO:\nDólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\nUsuario: ${pushName}${contextoProductos}\n\nHISTORIAL:\n${historial}\n\nMENSAJE: ${rawText}`;
+            const prompt = `INSTRUCCIONES:\n${inst}\n\nCONTEXTO:\nDólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\nUsuario: ${pushName}${dataProductos}\n\nHISTORIAL:\n${historial}\n\nMENSAJE: ${rawText}`;
             
             const result = await model.generateContent(prompt);
             const rIA = result.response.text();
             await guardarMensaje(from, 'model', rIA);
             await sock.sendMessage(from, { text: rIA });
-        } catch (e) { console.log("IA Error"); }
+        } catch (e) { console.log("Error IA"); }
     });
 }
 
-// ===== SERVIDOR HTTP COMPLETO RESTAURADO =====
+// ===== SERVIDOR HTTP =====
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const header = `<nav class="navbar navbar-dark bg-dark mb-4 shadow"><div class="container"><a class="navbar-brand fw-bold" href="/">ONE4CARS ADMIN</a></div></nav>`;
@@ -437,7 +442,7 @@ const server = http.createServer(async (req, res) => {
                             await socketBot.sendMessage(jid, { text: msg });
                         }
                         await randomDelay();
-                    } catch (e) { console.log("Error enviando marketing"); }
+                    } catch (e) { console.log("Error enviando"); }
                 }
             }
             res.end("OK");
@@ -457,12 +462,8 @@ const server = http.createServer(async (req, res) => {
                 await conn.end();
                 for (const f of facturas) {
                     const jid = formatWhatsApp(f.celular);
-                    const hoy = new Date();
-                    const fReg = new Date(f.fecha_reg);
-                    const diffDays = Math.ceil(Math.abs(hoy - fReg) / (1000 * 60 * 60 * 24));
-                    const vencimiento = diffDays > 30 ? diffDays - 30 : 0;
                     const saldoBs = (f.total - f.abono_factura) / (f.porcentaje || 1);
-                    const msg = `Hola *${f.nombres}* 🚗, le recordamos su factura #${f.nro_factura} pendiente.\nSaldo: Bs. *${saldoBs.toLocaleString('es-VE')}*\nDías vencidos: ${vencimiento}.\nPor favor gestione su pago.`;
+                    const msg = `Hola *${f.nombres}* 🚗, le recordamos su factura #${f.nro_factura} pendiente.\nSaldo: Bs. *${saldoBs.toLocaleString('es-VE')}*.\nPor favor gestione su pago.`;
                     await socketBot.sendMessage(jid, { text: msg });
                     await randomDelay();
                 }
