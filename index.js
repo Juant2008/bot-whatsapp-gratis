@@ -23,7 +23,6 @@ const model = genAI.getGenerativeModel({
     generationConfig: { temperature: 0.2, maxOutputTokens: 1000 } 
 });
 
-// POOL DE CONEXIONES
 const pool = mysql.createPool({
     host: 'one4cars.com',
     user: 'juant200_one4car',
@@ -56,8 +55,27 @@ let socketBot = null;
 let dolarInfo = { bcv: 'Cargando...', paralelo: 'Cargando...' };
 
 // ===== FUNCIONES DE APOYO =====
+
 function normalizar(texto) {
-    return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+    return texto
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") 
+        .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?!]/g, "") 
+        .toLowerCase()
+        .trim();
+}
+
+async function safeSendMessage(jid, content) {
+    try {
+        if (!socketBot) throw new Error("Socket no inicializado");
+        await socketBot.sendMessage(jid, content);
+        console.log(`[MSG] ✅ Mensaje enviado a ${jid}`);
+    } catch (e) {
+        console.log(`[MSG] ❌ Error enviando mensaje:`, e.message);
+        if (e.message.includes("Connection Closed") || e.message.includes("Bad MAC")) {
+            console.log("🚨 SESIÓN CORRUMPIDA. Por favor, borra la carpeta 'auth_info' y reinicia el bot para escanear el QR de nuevo.");
+        }
+    }
 }
 
 function isBotReady() {
@@ -148,47 +166,53 @@ async function buscarCliente(rifLimpio) {
     return r[0] || null;
 }
 
-// BÚSQUEDA DE PRODUCTOS ULTRA-FLEXIBLE
 async function buscarProductoPorTexto(texto) {
     const txtNormal = normalizar(texto);
-    const stopWords = ['tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde', 'precio', 'tienen', 'el', 'una', 'un', 'hay', 'si', 'es', 'de', 'con', 'para', 'busco', 'alguna', 'algun'];
+    const stopWords = ['tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde', 'precio', 'tienen', 'el', 'una', 'un', 'hay', 'si', 'es', 'de', 'con', 'para', 'busco'];
     
     const palabras = txtNormal.split(' ')
         .filter(p => p.length > 2 && !stopWords.includes(p));
         
     if (palabras.length === 0) return null;
 
-    // ESTRATEGIA 1: Búsqueda Estricta (Todas las palabras deben coincidir)
     let query = "SELECT producto, descripcion, tipo FROM tab_productos WHERE ";
+    
+    // Intento 1: Estricto
     let conditions = palabras.map(() => "descripcion LIKE ?").join(" AND ");
     let params = palabras.map(p => `%${p}%`);
     
-    console.log(`🔍 Intento 1 (Estricto): ${conditions} con ${params}`);
     try {
         const [rows] = await pool.execute(query + conditions + " LIMIT 5", params);
-        if (rows.length > 0) return rows;
+        if (rows.length > 0) {
+            console.log(`[DB] ✅ Producto encontrado en Intento Estricto`);
+            return rows;
+        }
     } catch (e) { console.log("Error SQL 1:", e); }
 
-    // ESTRATEGIA 2: Búsqueda Flexible (Solo las 2 palabras más importantes)
+    // Intento 2: Flexible
     if (palabras.length > 2) {
-        const palabrasImportantes = palabras.slice(0, 2);
-        let conditionsFlex = palabrasImportantes.map(() => "descripcion LIKE ?").join(" AND ");
-        let paramsFlex = palabrasImportantes.map(p => `%${p}%`);
-        
-        console.log(`🔍 Intento 2 (Flexible): ${conditionsFlex} con ${paramsFlex}`);
+        const pFlex = palabras.slice(0, 2);
+        const cFlex = pFlex.map(() => "descripcion LIKE ?").join(" AND ");
+        const vFlex = pFlex.map(p => `%${p}%`);
         try {
-            const [rows] = await pool.execute(query + conditionsFlex + " LIMIT 5", paramsFlex);
-            if (rows.length > 0) return rows;
-        } catch (e) { console.log("Error SQL 2:", e); }
+            const [rows] = await pool.execute(query + cFlex + " LIMIT 5", vFlex);
+            if (rows.length > 0) {
+                console.log(`[DB] ✅ Producto encontrado en Intento Flexible`);
+                return rows;
+            }
+        } catch (e) {}
     }
 
-    // ESTRATEGIA 3: Búsqueda Global (La frase completa)
-    console.log(`🔍 Intento 3 (Global): LIKE %${txtNormal}%`);
+    // Intento 3: Global
     try {
         const [rows] = await pool.execute("SELECT producto, descripcion, tipo FROM tab_productos WHERE descripcion LIKE ? LIMIT 5", [`%${txtNormal}%`]);
-        if (rows.length > 0) return rows;
-    } catch (e) { console.log("Error SQL 3:", e); }
+        if (rows.length > 0) {
+            console.log(`[DB] ✅ Producto encontrado en Intento Global`);
+            return rows;
+        }
+    } catch (e) {}
 
+    console.log(`[DB] ❌ No se encontró producto para: ${txtNormal}`);
     return null;
 }
 
@@ -255,7 +279,7 @@ async function startBot() {
             const textMe = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
             if (textMe === '!bot') {
                 await setModo(from, 'bot');
-                await sock.sendMessage(from, { text: "🤖 IA Reactivada para este chat." });
+                await safeSendMessage(from, { text: "🤖 IA Reactivada para este chat." });
             } else if (!isAdmin) {
                 await setModo(from, 'humano');
             }
@@ -274,11 +298,12 @@ async function startBot() {
         const sesion = await getSesion(from);
         if (sesion && sesion.modo === 'humano' && !isAdmin) return;
 
-        // --- 1. LÓGICA DE PRODUCTOS (PRIORIDAD MÁXIMA) ---
+        // --- 1. LÓGICA DE PRODUCTOS ---
         if (!esRIFPuro && text !== 'menu' && text !== 'hola') {
             try {
                 const prods = await buscarProductoPorTexto(rawText);
                 if (prods) {
+                    console.log(`[IA] 🤖 Generando respuesta con Gemini...`);
                     const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
                     const historial = await obtenerHistorial(from);
                     
@@ -290,10 +315,20 @@ async function startBot() {
 
                     const prompt = `INSTRUCCIONES:\n${inst}\n\nCONTEXTO:\nDólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\nUsuario: ${pushName}${dataProductos}\n\nHISTORIAL:\n${historial}\n\nMENSAJE: ${rawText}`;
                     
-                    const result = await model.generateContent(prompt);
-                    const rIA = result.response.text();
-                    await guardarMensaje(from, 'model', rIA);
-                    return await sock.sendMessage(from, { text: rIA });
+                    try {
+                        const result = await model.generateContent(prompt);
+                        const rIA = result.response.text();
+                        await guardarMensaje(from, 'model', rIA);
+                        return await safeSendMessage(from, { text: rIA });
+                    } catch (aiError) {
+                        console.log(`[IA] ❌ Error en Gemini, usando respuesta de emergencia...`);
+                        // RESPUESTA DE EMERGENCIA (Si la IA falla, enviamos el link directo)
+                        let emergencyMsg = `✅ ¡Hola ${pushName}! Tenemos productos relacionados:\n\n`;
+                        prods.forEach(p => {
+                            emergencyMsg += `📦 *${p.descripcion}*\n🔗 Ficha técnica: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
+                        });
+                        return await safeSendMessage(from, { text: emergencyMsg });
+                    }
                 }
             } catch (e) { console.log("Error en flujo de productos:", e); }
         }
@@ -302,10 +337,10 @@ async function startBot() {
         if (isAdmin) {
             if (text === 'dolar') {
                 await actualizarDolar();
-                return await sock.sendMessage(from, { text: `💵 BCV: ${dolarInfo.bcv}\n📈 Paralelo: ${dolarInfo.paralelo}` });
+                return await safeSendMessage(from, { text: `💵 BCV: ${dolarInfo.bcv}\n📈 Paralelo: ${dolarInfo.paralelo}` });
             }
             if (text === 'menu' || text === 'hola' || text === 'buen dia') {
-                return await sock.sendMessage(from, { text: `⭐ *MODO ADMINISTRADOR*\n\n${MENU_TEXT}` });
+                return await safeSendMessage(from, { text: `⭐ *MODO ADMINISTRADOR*\n\n${MENU_TEXT}` });
             }
             if (esRIFPuro) {
                 const c = await buscarCliente(rawText.replace(/\s/g, ''));
@@ -323,33 +358,33 @@ async function startBot() {
                         });
                         list += `💰 *Total Máster: $${totalP.toFixed(2)}*`;
                     }
-                    return await sock.sendMessage(from, { text: list });
+                    return await safeSendMessage(from, { text: list });
                 } else {
-                    return await sock.sendMessage(from, { text: "❌ No se encontró cliente con ese RIF." });
+                    return await safeSendMessage(from, { text: "❌ No se encontró cliente con ese RIF." });
                 }
             }
         }
 
         // --- 3. VENDEDOR / CLIENTE ---
         if (vendedor && (text === 'menu' || text === 'hola')) {
-            return await sock.sendMessage(from, { text: `👋 Hola *${vendedor.nombre}*.\n\n${MENU_TEXT}` });
+            return await safeSendMessage(from, { text: `👋 Hola *${vendedor.nombre}*.\n\n${MENU_TEXT}` });
         }
 
         if (esRIFPuro && (!sesion || !sesion.id_cliente_int) && !isAdmin) {
             const c = await buscarCliente(rawText.replace(/\s/g, ''));
             if (c) {
                 await guardarUsuario(from, rawText.replace(/\s/g, ''), c.id_cliente);
-                return await sock.sendMessage(from, { text: `✅ ¡Hola *${c.nombres}*! RIF vinculado.\n\n${MENU_TEXT}` });
+                return await safeSendMessage(from, { text: `✅ ¡Hola *${c.nombres}*! RIF vinculado.\n\n${MENU_TEXT}` });
             }
         }
 
-        if (text === 'menu') return await sock.sendMessage(from, { text: MENU_TEXT });
+        if (text === 'menu') return await safeSendMessage(from, { text: MENU_TEXT });
         
         if (text.includes("saldo") || text === '2') {
             const targetID = sesion?.id_cliente_int;
-            if (!targetID) return await sock.sendMessage(from, { text: "Por favor envíe su RIF para identificarse." });
+            if (!targetID) return await safeSendMessage(from, { text: "Por favor envíe su RIF para identificarse." });
             const facturas = await obtenerDetalleFacturas(targetID);
-            if (facturas.length === 0) return await sock.sendMessage(from, { text: "✅ No posee facturas pendientes." });
+            if (facturas.length === 0) return await safeSendMessage(from, { text: "✅ No posee facturas pendientes." });
             let totalP = 0; let listado = "*📄 FACTURAS PENDIENTES:*\n\n";
             facturas.forEach(f => {
                 const monto = (f.total - f.abono_factura) / (f.porcentaje || 1);
@@ -359,7 +394,7 @@ async function startBot() {
                 listado += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n📄 PDF: https://one4cars.com/sevencorp/factura_full_reporte_web.php?${params}\n\n`;
             });
             listado += `💰 *TOTAL A PAGAR: $${totalP.toFixed(2)}*`;
-            return await sock.sendMessage(from, { text: listado });
+            return await safeSendMessage(from, { text: listado });
         }
 
         // --- 4. FALLBACK IA ---
@@ -369,7 +404,7 @@ async function startBot() {
             const result = await model.generateContent(prompt);
             const rIA = result.response.text();
             await guardarMensaje(from, 'model', rIA);
-            await sock.sendMessage(from, { text: rIA });
+            await safeSendMessage(from, { text: rIA });
         } catch (e) {}
     });
 }
@@ -410,9 +445,9 @@ const server = http.createServer(async (req, res) => {
                     const jid = formatWhatsApp(c.celular);
                     try {
                         if (data.tipo === 'precios') {
-                            await socketBot.sendMessage(jid, { document: { url: PDF_URL_CATALOGO }, fileName: 'Catalogo-ONE4CARS.pdf', mimetype: 'application/pdf', caption: `¡Hola *${c.nombres}*! Catálogo actualizado.` });
+                            await safeSendMessage(jid, { document: { url: PDF_URL_CATALOGO }, fileName: 'Catalogo-ONE4CARS.pdf', mimetype: 'application/pdf', caption: `¡Hola *${c.nombres}*! Catálogo actualizado.` });
                         } else if (data.tipo === 'promo') {
-                            await socketBot.sendMessage(jid, { text: data.mensaje });
+                            await safeSendMessage(jid, { text: data.mensaje });
                         }
                         await randomDelay();
                     } catch (e) {}
@@ -434,7 +469,7 @@ const server = http.createServer(async (req, res) => {
                     const jid = formatWhatsApp(f.celular);
                     const saldoBs = (f.total - f.abono_factura) / (f.porcentaje || 1);
                     const msg = `Hola *${f.nombres}* 🚗, factura #${f.nro_factura} pendiente.\nSaldo: Bs. *${saldoBs.toLocaleString('es-VE')}*.\nPor favor gestione su pago.`;
-                    await socketBot.sendMessage(jid, { text: msg });
+                    await safeSendMessage(jid, { text: msg });
                     await randomDelay();
                 }
             }
