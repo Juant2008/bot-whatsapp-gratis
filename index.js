@@ -316,7 +316,7 @@ async function startBot() {
 
                             const params = `id_factura=${f.id_factura}&nro_factura=${f.nro_factura}&fecha_reg=${fReg}&total=${f.total}&abono_factura=${f.abono_factura}&nombres=${encodeURIComponent(c_nom)}&nombre=${encodeURIComponent(v_nom)}&direccion=${encodeURIComponent(c_dir)}&cedula=${f.cedula}&celular=${encodeURIComponent(c_cel)}&id_cliente=${f.id_cliente}&zona=${encodeURIComponent(f.zona || "")}&descuento=${f.descuento}&total_desc=${f.total_desc}`;
                             
-                            list += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n📄 Ver: https://one4cars.com/sevencorp/factura_full_reporte_web.php?${params}\n✍️ Firmada: https://www.one4cars.com/sevencorpweb/uploads/notas/${f.nro_factura}.jpg\n\n`;
+                            list += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n📄 Ver: https://one4cars.com/sevencorp/factura_full_reporte_web.php?${params}\n✍️ Firmada: https://www.one4cars.com/uploads/notas/${f.nro_factura}.jpg\n\n`;
                         });
                         list += `💰 *Total Máster: $${totalP.toFixed(2)}*`;
                     }
