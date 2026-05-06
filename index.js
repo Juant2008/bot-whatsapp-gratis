@@ -20,52 +20,42 @@ const apiKey = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(apiKey);
 const model = genAI.getGenerativeModel({ 
     model: "gemini-1.5-flash", 
-    generationConfig: { temperature: 0.3, maxOutputTokens: 1000 } // Temperatura baja para mayor precisión técnica
+    generationConfig: { temperature: 0.2, maxOutputTokens: 1000 } // Temperatura baja para evitar que la IA invente medidas
 });
 
-const dbConfig = {
+// POOL DE CONEXIONES (Optimización para evitar caídas de DB)
+const pool = mysql.createPool({
     host: 'one4cars.com',
     user: 'juant200_one4car',
     password: 'Notieneclave1*',
-    database: 'juant200_venezon'
-};
+    database: 'juant200_venezon',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+});
 
 const PDF_URL_CATALOGO = "https://www.one4cars.com/sevencorpweb/uploads/precios/Catalogo%20-%20ONE4CARS_compressed.pdf";
-
-// TU ID DE ADMINISTRADOR
 const ADMIN_ID = "228621243408492";
 
-// MENÚ COMPLETO
 const MENU_TEXT = `📋 *MENÚ PRINCIPAL ONE4CARS*
 
 1️⃣ *Medios de pago:* https://www.one4cars.com/medios_de_pago.php/
-
 2️⃣ *Estado de cuenta:* https://www.one4cars.com/estado_de_cuenta.php/
-
 3️⃣ *Lista de precios:* https://www.one4cars.com/lista_de_precios.php/
-
 4️⃣ *Tomar pedido:* https://www.one4cars.com/tomar_pedido.php/
-
 5️⃣ *Mis clientes/Vendedores:* https://www.one4cars.com/mis_clientes.php/
-
 6️⃣ *Afiliar cliente:* https://www.one4cars.com/afiliar_clientes.php/
-
 7️⃣ *Consulta de productos:* https://www.one4cars.com/consulta_productos.php/
-
 8️⃣ *Seguimiento Despacho:* https://www.one4cars.com/despacho.php/
-
 9️⃣ *Asesor Humano:* Indique su duda y un operador revisará el caso pronto.
 
 _Escriba el número de la opción o su consulta directamente._`;
 
-// VARIABLES GLOBALES
 let qrCodeData = "Iniciando...";
 let socketBot = null;
 let dolarInfo = { bcv: 'Cargando...', paralelo: 'Cargando...' };
 
 // ===== FUNCIONES DE APOYO =====
-async function db() { return await mysql.createConnection(dbConfig); }
-
 function normalizar(texto) {
     return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 }
@@ -93,44 +83,34 @@ const randomDelay = async () => {
 
 async function guardarMensaje(tel, rol, contenido) {
     try {
-        const conn = await db();
-        await conn.execute("INSERT INTO historial_chat (telefono, rol, contenido) VALUES (?, ?, ?)", [tel, rol, contenido]);
-        await conn.end();
+        await pool.execute("INSERT INTO historial_chat (telefono, rol, contenido) VALUES (?, ?, ?)", [tel, rol, contenido]);
     } catch (e) { console.log("Error guardando historial"); }
 }
 
 async function obtenerHistorial(tel) {
     try {
-        const conn = await db();
-        const [rows] = await conn.execute("SELECT rol, contenido FROM historial_chat WHERE telefono = ? ORDER BY fecha ASC LIMIT 10", [tel]);
-        await conn.end();
+        const [rows] = await pool.execute("SELECT rol, contenido FROM historial_chat WHERE telefono = ? ORDER BY fecha ASC LIMIT 10", [tel]);
         return rows.map(r => `${r.rol === 'user' ? 'Cliente' : 'Bot'}: ${r.contenido}`).join("\n");
     } catch (e) { return ""; }
 }
 
 async function setModo(tel, modo) {
-    const conn = await db();
-    await conn.execute("INSERT INTO control_chat (telefono, modo) VALUES (?, ?) ON DUPLICATE KEY UPDATE modo = VALUES(modo)", [tel, modo]);
-    await conn.end();
+    await pool.execute("INSERT INTO control_chat (telefono, modo) VALUES (?, ?) ON DUPLICATE KEY UPDATE modo = VALUES(modo)", [tel, modo]);
 }
 
 async function buscarVendedor(jid, pushName) {
     const telLimpio = jid.split('@')[0]; 
-    const conn = await db();
-    const [r] = await conn.execute(
+    const [r] = await pool.execute(
         "SELECT * FROM tab_vendedores WHERE celular_vendedor LIKE ? OR telefono_vendedor LIKE ? OR nombre LIKE ? LIMIT 1", 
         [`%${telLimpio}%`, `%${telLimpio}%`, `%${pushName}%`]
     );
-    await conn.end();
     return r[0] || null;
 }
 
 // ===== BASE DE DATOS =====
 async function initDB() {
-    let conn;
     try {
-        conn = await db();
-        await conn.execute(`CREATE TABLE IF NOT EXISTS control_chat (
+        await pool.execute(`CREATE TABLE IF NOT EXISTS control_chat (
             telefono VARCHAR(100) PRIMARY KEY, 
             usuario VARCHAR(50), 
             id_cliente_int INT,
@@ -138,7 +118,7 @@ async function initDB() {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci`);
         
-        await conn.execute(`CREATE TABLE IF NOT EXISTS historial_chat (
+        await pool.execute(`CREATE TABLE IF NOT EXISTS historial_chat (
             id INT AUTO_INCREMENT PRIMARY KEY, 
             telefono VARCHAR(100), 
             rol ENUM('user', 'model'), 
@@ -146,65 +126,52 @@ async function initDB() {
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci`);
         
-        console.log("✅ Base de Datos vinculada.");
+        console.log("✅ Base de Datos vinculada con Pool.");
     } catch (e) { console.log("❌ Error DB Init:", e.message); }
-    finally { if(conn) await conn.end(); }
 }
 
 async function getSesion(jid) {
-    try {
-        const conn = await db();
-        const [r] = await conn.execute("SELECT * FROM control_chat WHERE telefono=?", [jid]);
-        await conn.end();
-        return r[0] || null;
-    } catch (e) { return null; }
+    const [r] = await pool.execute("SELECT * FROM control_chat WHERE telefono=?", [jid]);
+    return r[0] || null;
 }
 
 async function guardarUsuario(jid, usuario, id_int) {
-    const conn = await db();
-    await conn.execute(`
+    await pool.execute(`
         INSERT INTO control_chat (telefono, usuario, id_cliente_int, modo) 
         VALUES (?, ?, ?, 'bot') 
         ON DUPLICATE KEY UPDATE usuario=VALUES(usuario), id_cliente_int=VALUES(id_cliente_int), modo='bot'
     `, [jid, usuario, id_int]);
-    await conn.end();
 }
 
 async function buscarCliente(rifLimpio) {
-    const conn = await db();
-    const [r] = await conn.execute("SELECT id_cliente, nombres, celular, cedula, direccion, zona FROM tab_clientes WHERE clave = ? OR clave LIKE ? LIMIT 1", [rifLimpio, `%${rifLimpio}%`]);
-    await conn.end();
+    const [r] = await pool.execute("SELECT id_cliente, nombres, celular, cedula, direccion, zona FROM tab_clientes WHERE clave = ? OR clave LIKE ? LIMIT 1", [rifLimpio, `%${rifLimpio}%`]);
     return r[0] || null;
 }
 
-// BÚSQUEDA DE PRODUCTOS OPTIMIZADA
+// BÚSQUEDA DE PRODUCTOS (Súper optimizada)
 async function buscarProductoPorTexto(texto) {
     const txtNormal = normalizar(texto);
-    // Eliminamos palabras que no ayudan a filtrar en la DB pero dejamos "lisa" o "acanalada"
-    const stopWords = ['tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde', 'precio', 'tienen', 'el', 'una', 'un', 'hay', 'si', 'es'];
+    const stopWords = ['tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde', 'precio', 'tienen', 'el', 'una', 'un', 'hay', 'si', 'es', 'de', 'con', 'para'];
     
     const palabras = txtNormal.split(' ')
         .filter(p => p.length > 2 && !stopWords.includes(p));
         
     if (palabras.length === 0) return null;
 
-    const conn = await db();
     let query = "SELECT producto, descripcion, tipo FROM tab_productos WHERE ";
     let conditions = palabras.map(() => "descripcion LIKE ?").join(" AND ");
     let params = palabras.map(p => `%${p}%`);
 
     try {
-        const [rows] = await conn.execute(query + conditions + " LIMIT 5", params);
-        await conn.end();
+        const [rows] = await pool.execute(query + conditions + " LIMIT 5", params);
         return rows.length > 0 ? rows : null;
     } catch (e) {
-        if(conn) await conn.end();
+        console.log("Error SQL Producto:", e);
         return null;
     }
 }
 
 async function obtenerDetalleFacturas(id_cliente, id_vendedor = null) {
-    const conn = await db();
     let query = `
         SELECT f.id_factura, f.nro_factura, f.total, f.abono_factura, f.fecha_reg, f.porcentaje, f.descuento, f.total_desc,
                 c.nombres, c.direccion, c.cedula, c.celular, c.telefono, c.id_cliente, c.zona, c.vendedor as nombre_vendedor
@@ -213,8 +180,7 @@ async function obtenerDetalleFacturas(id_cliente, id_vendedor = null) {
          WHERE f.id_cliente = ? AND f.pagada = 'NO' AND f.anulado = 'no'`;
     let params = [id_cliente];
     if (id_vendedor) { query += ` AND f.id_vendedor = ?`; params.push(id_vendedor); }
-    const [facturas] = await conn.execute(query, params);
-    await conn.end();
+    const [facturas] = await pool.execute(query, params);
     return facturas;
 }
 
@@ -280,41 +246,38 @@ async function startBot() {
         if (!rawText) return;
 
         const text = normalizar(rawText);
-        const soloNumeros = rawText.replace(/\s/g, ''); 
+        
+        // CORRECCIÓN RIF: Solo es RIF si el mensaje completo son solo números
+        const esRIFPuro = /^\d+$/.test(rawText.replace(/\s/g, '')) && rawText.length >= 6;
 
         await guardarMensaje(from, 'user', rawText);
 
         const sesion = await getSesion(from);
         if (sesion && sesion.modo === 'humano' && !isAdmin) return;
 
-        // --- 1. LÓGICA DE PRODUCTOS (Prioridad máxima) ---
-        const esRIFPuro = soloNumeros.length >= 6 && /^\d+$/.test(soloNumeros);
-        const palabrasClaveProd = ["tienes", "hay", "polea", "corsa", "bomba", "filtro", "disponible", "precio", "mide", "medida", "lisa", "acanalada"];
-        const pareceConsultaProd = palabrasClaveProd.some(p => text.includes(p));
-
-        if (pareceConsultaProd && !esRIFPuro) {
+        // --- 1. LÓGICA DE PRODUCTOS (PRIORIDAD ABSOLUTA) ---
+        // Intentamos buscar en la DB siempre que no sea un RIF puro o un comando de menú
+        if (!esRIFPuro && text !== 'menu' && text !== 'hola') {
             try {
-                const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
-                const historial = await obtenerHistorial(from);
-                let dataProductos = "";
                 const prods = await buscarProductoPorTexto(rawText);
-                
                 if (prods) {
-                    dataProductos = "\n\nINFORMACIÓN TÉCNICA DE PRODUCTOS ENCONTRADOS:\n";
+                    const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
+                    const historial = await obtenerHistorial(from);
+                    
+                    let dataProductos = "\n\nDATOS REALES DE LA BASE DE DATOS:\n";
                     prods.forEach(p => {
-                        dataProductos += `PRODUCTO_COD: ${p.producto} | TIPO: ${p.tipo} | DESCRIPCION_COMPLETA: ${p.descripcion}\n`;
-                        dataProductos += `LINK_FICHA: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
+                        dataProductos += `CÓDIGO: ${p.producto} | TIPO: ${p.tipo} | DESCRIPCIÓN: ${p.descripcion} | LINK: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n`;
                     });
-                    dataProductos += `INSTRUCCIÓN CRÍTICA: Si el usuario pregunta por medidas (cuánto mide), si es lisa o acanalada, busca esa información exactamente en la 'DESCRIPCION_COMPLETA'. Responde de forma natural y SIEMPRE adjunta el LINK_FICHA correspondiente al producto.`;
-                }
+                    dataProductos += `\nINSTRUCCIÓN: El cliente pregunta por "${rawText}". Usa la DESCRIPCIÓN para responder si es lisa, acanalada o cuánto mide (ej: 70x26x17). SIEMPRE entrega el LINK al final.`;
 
-                const prompt = `INSTRUCCIONES GENERALES:\n${inst}\n\nCONTEXTO ACTUAL:\nDólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\nUsuario: ${pushName}${dataProductos}\n\nHISTORIAL DE CHAT:\n${historial}\n\nMENSAJE DEL CLIENTE: ${rawText}`;
-                
-                const result = await model.generateContent(prompt);
-                const rIA = result.response.text();
-                await guardarMensaje(from, 'model', rIA);
-                return await sock.sendMessage(from, { text: rIA });
-            } catch (e) { console.log("Error en búsqueda IA:", e); }
+                    const prompt = `INSTRUCCIONES:\n${inst}\n\nCONTEXTO:\nDólar BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}\nUsuario: ${pushName}${dataProductos}\n\nHISTORIAL:\n${historial}\n\nMENSAJE: ${rawText}`;
+                    
+                    const result = await model.generateContent(prompt);
+                    const rIA = result.response.text();
+                    await guardarMensaje(from, 'model', rIA);
+                    return await sock.sendMessage(from, { text: rIA });
+                }
+            } catch (e) { console.log("Error en flujo de productos:", e); }
         }
 
         // --- 2. COMANDOS DE ADMINISTRADOR ---
@@ -327,7 +290,7 @@ async function startBot() {
                 return await sock.sendMessage(from, { text: `⭐ *MODO ADMINISTRADOR*\n\n${MENU_TEXT}` });
             }
             if (esRIFPuro) {
-                const c = await buscarCliente(soloNumeros);
+                const c = await buscarCliente(rawText.replace(/\s/g, ''));
                 if (c) {
                     const facturas = await obtenerDetalleFacturas(c.id_cliente);
                     let totalP = 0; 
@@ -349,15 +312,15 @@ async function startBot() {
             }
         }
 
-        // --- 3. VENDEDOR / CLIENTE (RESTO DE LÓGICA) ---
+        // --- 3. VENDEDOR / CLIENTE ---
         if (vendedor && (text === 'menu' || text === 'hola')) {
             return await sock.sendMessage(from, { text: `👋 Hola *${vendedor.nombre}*.\n\n${MENU_TEXT}` });
         }
 
         if (esRIFPuro && (!sesion || !sesion.id_cliente_int) && !isAdmin) {
-            const c = await buscarCliente(soloNumeros);
+            const c = await buscarCliente(rawText.replace(/\s/g, ''));
             if (c) {
-                await guardarUsuario(from, soloNumeros, c.id_cliente);
+                await guardarUsuario(from, rawText.replace(/\s/g, ''), c.id_cliente);
                 return await sock.sendMessage(from, { text: `✅ ¡Hola *${c.nombres}*! RIF vinculado.\n\n${MENU_TEXT}` });
             }
         }
@@ -381,7 +344,7 @@ async function startBot() {
             return await sock.sendMessage(from, { text: listado });
         }
 
-        // --- 4. FALLBACK IA (SI NADA DE LO ANTERIOR COINCIDIÓ) ---
+        // --- 4. FALLBACK IA ---
         try {
             const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
             const prompt = `INSTRUCCIONES:\n${inst}\n\nDólar: ${dolarInfo.bcv}\nUsuario: ${pushName}\n\nMENSAJE: ${rawText}`;
@@ -410,13 +373,11 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
         res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, parsedUrl.query));
     } else if (parsedUrl.pathname === '/marketing-preview') {
-        const conn = await db();
         let sql = "SELECT id_cliente, nombres, celular FROM tab_clientes WHERE celular IS NOT NULL AND celular != ''";
         const params = [];
         if (parsedUrl.query.vendedor) { sql += " AND vendedor = ?"; params.push(parsedUrl.query.vendedor); }
         if (parsedUrl.query.zona) { sql += " AND zona = ?"; params.push(parsedUrl.query.zona); }
-        const [clientes] = await conn.execute(sql, params);
-        await conn.end();
+        const [clientes] = await pool.execute(sql, params);
         res.writeHead(200, {'Content-Type': 'application/json'});
         res.end(JSON.stringify(clientes));
     } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
@@ -425,9 +386,7 @@ const server = http.createServer(async (req, res) => {
         req.on('end', async () => {
             const data = JSON.parse(b);
             for (const id of data.clientes) {
-                const conn = await db();
-                const [rows] = await conn.execute("SELECT * FROM tab_clientes WHERE id_cliente=?", [id]);
-                await conn.end();
+                const [rows] = await pool.execute("SELECT * FROM tab_clientes WHERE id_cliente=?", [id]);
                 if (rows[0]) {
                     const c = rows[0];
                     const jid = formatWhatsApp(c.celular);
@@ -449,12 +408,10 @@ const server = http.createServer(async (req, res) => {
         req.on('end', async () => {
             const data = JSON.parse(b);
             for (const id_cliente of data.facturas) {
-                const conn = await db();
-                const [facturas] = await conn.execute(
+                const [facturas] = await pool.execute(
                     "SELECT f.nro_factura, f.total, f.abono_factura, f.fecha_reg, f.porcentaje, c.nombres, c.celular FROM tab_facturas f JOIN tab_clientes c ON f.id_cliente = c.id_cliente WHERE f.id_cliente = ? AND f.pagada = 'NO' AND f.anulado = 'no'", 
                     [id_cliente]
                 );
-                await conn.end();
                 for (const f of facturas) {
                     const jid = formatWhatsApp(f.celular);
                     const saldoBs = (f.total - f.abono_factura) / (f.porcentaje || 1);
