@@ -262,7 +262,6 @@ async function startBot() {
 
         if (msg.key.fromMe) {
             const textMe = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
-            
             if (textMe === '!bot') {
                 await setModo(from, 'bot');
                 await safeSendMessage(from, { text: "🤖 *IA Reactivada:* El bot volverá a responder automáticamente en este chat." });
@@ -277,20 +276,36 @@ async function startBot() {
         if (!rawText) return;
 
         const text = normalizar(rawText);
-        
         const rifSoloNumeros = rawText.replace(/\D/g, '');
         const esRIFPuro = rifSoloNumeros.length >= 6 && rawText.length <= 15;
+
+        console.log(`[LOG] Recibido de ${pushName} (${from}): "${rawText}"`);
 
         await guardarMensaje(from, 'user', rawText);
 
         const sesion = await getSesion(from);
-        if (sesion && sesion.modo === 'humano' && !isAdmin) return;
+        if (sesion && sesion.modo === 'humano' && !isAdmin) {
+            console.log(`[LOG] 👤 Chat en modo HUMANO. Bot ignora mensaje.`);
+            return;
+        }
 
-        // --- 1. LÓGICA DE PRODUCTOS ---
-        if (!esRIFPuro && text !== 'menu' && text !== 'hola') {
+        // --- 1. SALUDOS Y MENÚ (Prioridad para que el cliente siempre reciba algo) ---
+        if (text === 'menu' || text === 'hola' || text === 'buen dia') {
+            if (vendedor) {
+                return await safeSendMessage(from, { text: `👋 Hola *${vendedor.nombre}*.\n\n${MENU_TEXT}` });
+            } else if (isAdmin) {
+                return await safeSendMessage(from, { text: `⭐ *MODO ADMINISTRADOR*\n\n${MENU_TEXT}` });
+            } else {
+                return await safeSendMessage(from, { text: `👋 ¡Hola ${pushName}!\n\n${MENU_TEXT}` });
+            }
+        }
+
+        // --- 2. LÓGICA DE PRODUCTOS ---
+        if (!esRIFPuro) {
             try {
                 const prods = await buscarProductoPorTexto(rawText);
                 if (prods) {
+                    console.log(`[LOG] 📦 Productos encontrados para: ${rawText}`);
                     const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
                     const historial = await obtenerHistorial(from);
                     
@@ -316,7 +331,7 @@ async function startBot() {
                         finalResponseText = result.response.text();
                         await guardarMensaje(from, 'model', finalResponseText);
                     } catch (aiError) {
-                        console.log(`[IA] ❌ Error en Gemini, usando respuesta de emergencia...`);
+                        console.log(`[IA] ❌ Error Gemini:`, aiError.message);
                         let emergencyMsg = `✅ ¡Hola ${pushName}! Tenemos productos relacionados:\n\n`;
                         prods.forEach(p => {
                             const precioLimpio = parseFloat(p.precio_final || 0).toFixed(2);
@@ -337,7 +352,7 @@ async function startBot() {
                             });
                             await sleep(1000);
                         } catch (imgErr) {
-                            console.log(`[MSG] ⚠️ Imagen no disponible para producto ${p.producto}`);
+                            console.log(`[MSG] ⚠️ Imagen no disponible para ${p.producto}`);
                         }
                     }
                     return;
@@ -345,14 +360,11 @@ async function startBot() {
             } catch (e) { console.log("Error en flujo de productos:", e); }
         }
 
-        // --- 2. COMANDOS DE ADMINISTRADOR ---
+        // --- 3. COMANDOS DE ADMINISTRADOR ---
         if (isAdmin) {
             if (text === 'dolar') {
                 await actualizarDolar();
                 return await safeSendMessage(from, { text: `💵 BCV: ${dolarInfo.bcv}\n📈 Paralelo: ${dolarInfo.paralelo}` });
-            }
-            if (text === 'menu' || text === 'hola' || text === 'buen dia') {
-                return await safeSendMessage(from, { text: `⭐ *MODO ADMINISTRADOR*\n\n${MENU_TEXT}` });
             }
             if (esRIFPuro) {
                 const c = await buscarCliente(rifSoloNumeros);
@@ -377,11 +389,7 @@ async function startBot() {
             }
         }
 
-        // --- 3. VENDEDOR / CLIENTE ---
-        if (vendedor && (text === 'menu' || text === 'hola')) {
-            return await safeSendMessage(from, { text: `👋 Hola *${vendedor.nombre}*.\n\n${MENU_TEXT}` });
-        }
-
+        // --- 4. VENDEDOR / CLIENTE (RIF) ---
         if (esRIFPuro && (!sesion || !sesion.id_cliente_int) && !isAdmin) {
             const c = await buscarCliente(rifSoloNumeros);
             if (c) {
@@ -390,8 +398,6 @@ async function startBot() {
             }
         }
 
-        if (text === 'menu') return await safeSendMessage(from, { text: MENU_TEXT });
-        
         if (text.includes("saldo") || text === '2') {
             const targetID = sesion?.id_cliente_int;
             if (!targetID) return await safeSendMessage(from, { text: "Por favor envíe su RIF para identificarse." });
@@ -409,15 +415,19 @@ async function startBot() {
             return await safeSendMessage(from, { text: listado });
         }
 
-        // --- 4. FALLBACK IA ---
+        // --- 5. FALLBACK IA (Última instancia) ---
         try {
+            console.log(`[LOG] Enviando mensaje de ${pushName} a la IA...`);
             const inst = fs.readFileSync('./instrucciones.txt', 'utf8');
             const prompt = `INSTRUCCIONES:\n${inst}\n\nDólar: ${dolarInfo.bcv}\nUsuario: ${pushName}\n\nMENSAJE: ${rawText}`;
             const result = await model.generateContent(prompt);
             const rIA = result.response.text();
             await guardarMensaje(from, 'model', rIA);
             await safeSendMessage(from, { text: rIA });
-        } catch (e) {}
+        } catch (e) {
+            console.log(`[IA] ❌ Error Crítico IA:`, e.message);
+            await safeSendMessage(from, { text: `⚠️ Hola ${pushName}, en este momento mi sistema de inteligencia artificial está saturado. He notificado a un operador y te responderemos en breve. 🚗` });
+        }
     });
 }
 
