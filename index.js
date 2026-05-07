@@ -57,6 +57,11 @@ function normalizar(texto) {
         .trim();
 }
 
+// Función para limpiar RIFs (Quita guiones, puntos y pone la letra en Mayúscula)
+function limpiarRIF(texto) {
+    return texto.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+}
+
 async function safeSendMessage(jid, content) {
     try {
         if (!socketBot) throw new Error("Socket no inicializado");
@@ -259,19 +264,50 @@ async function startBot() {
         if (!rawText) return;
 
         const text = normalizar(rawText);
-        const esRIFPuro = /^\d+$/.test(rawText.replace(/\s/g, '')) && rawText.length >= 6;
+        
+        // CORRECCIÓN RIF: Ahora acepta letras (V, J, G, E) y números
+        const esRIFPuro = /^[vjgje]?\d+$/i.test(rawText.replace(/[^a-zA-Z0-9]/g, '')) && rawText.length >= 6;
 
         await guardarMensaje(from, 'user', rawText);
 
         const sesion = await getSesion(from);
         if (sesion && sesion.modo === 'humano' && !isAdmin) return;
 
-        // --- 1. LÓGICA DE PRODUCTOS (SIN API) ---
-        if (!esRIFPuro && text !== 'menu' && text !== 'hola') {
+        // --- 1. LÓGICA DE RIF (Cualquier usuario puede consultar) ---
+        if (esRIFPuro) {
+            const rifLimpio = limpiarRIF(rawText);
+            const c = await buscarCliente(rifLimpio);
+            if (c) {
+                // Vinculamos el usuario automáticamente si no lo estaba
+                await guardarUsuario(from, rifLimpio, c.id_cliente);
+                
+                const facturas = await obtenerDetalleFacturas(c.id_cliente);
+                let totalP = 0; 
+                let list = `⭐ *CONSULTA DE ESTADO DE CUENTA*\nCliente: ${c.nombres}\nRIF: ${rifLimpio}\n\n`;
+                
+                if (facturas.length === 0) {
+                    list += `✅ No posee facturas pendientes.`;
+                } else {
+                    facturas.forEach(f => {
+                        const monto = (f.total - f.abono_factura) / (f.porcentaje || 1);
+                        totalP += monto;
+                        const fReg = new Date(f.fecha_reg).toISOString().split('T')[0];
+                        const params = `id_factura=${f.id_factura}&nro_factura=${f.nro_factura}&fecha_reg=${fReg}&total=${f.total}&abono_factura=${f.abono_factura}&nombres=${encodeURIComponent(f.nombres.trim())}&nombre=${encodeURIComponent(f.nombre_vendedor.trim())}&direccion=${encodeURIComponent(f.direccion.trim())}&cedula=${f.cedula.trim()}&celular=${encodeURIComponent(f.celular.trim())}&telefono=${encodeURIComponent(f.telefono.trim())}&id_cliente=${f.id_cliente}&zona=${encodeURIComponent(f.zona.trim())}&descuento=${f.descuento}&total_desc=${f.total_desc}`;
+                        list += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n📄 PDF: https://one4cars.com/sevencorp/factura_full_reporte_web.php?${params}\n\n`;
+                    });
+                    list += `💰 *TOTAL A PAGAR: $${totalP.toFixed(2)}*`;
+                }
+                return await safeSendMessage(from, { text: list });
+            } else {
+                return await safeSendMessage(from, { text: "❌ No se encontró ningún cliente con ese RIF." });
+            }
+        }
+
+        // --- 2. LÓGICA DE PRODUCTOS (SIN API) ---
+        if (text !== 'menu' && text !== 'hola') {
             try {
                 const prods = await buscarProductoPorTexto(rawText);
                 if (prods) {
-                    // Construimos la respuesta general llamativa
                     let generalText = `✅ ¡Hola ${pushName}! Encontramos los siguientes productos relacionados:\n\n`;
                     
                     prods.forEach(p => {
@@ -279,22 +315,14 @@ async function startBot() {
                         generalText += `📦 *CÓDIGO: ${p.producto}*\n💰 *Precio Final: $${precioLimpio}*\n📝 ${p.descripcion}\n🔗 Ficha: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
                     });
 
-                    // Enviamos las imágenes una por una
                     for (let i = 0; i < prods.length; i++) {
                         const p = prods[i];
                         const imgUrl = `https://one4cars.com/imagen/${p.producto}.jpg`;
                         const precioLimpio = parseFloat(p.precio_final || 0).toFixed(2);
-                        
-                        // El primer producto lleva el texto general, los demás un resumen
-                        const caption = (i === 0) 
-                            ? generalText 
-                            : `📦 *CÓDIGO: ${p.producto}*\n💰 *Precio Final: $${precioLimpio}*`;
+                        const caption = (i === 0) ? generalText : `📦 *CÓDIGO: ${p.producto}*\n💰 *Precio Final: $${precioLimpio}*`;
 
                         try {
-                            await socketBot.sendMessage(from, { 
-                                image: { url: imgUrl }, 
-                                caption: caption 
-                            });
+                            await socketBot.sendMessage(from, { image: { url: imgUrl }, caption: caption });
                         } catch (imgErr) {
                             if (i === 0) await safeSendMessage(from, { text: generalText });
                         }
@@ -304,7 +332,7 @@ async function startBot() {
             } catch (e) { console.log("Error en flujo de productos:", e); }
         }
 
-        // --- 2. COMANDOS DE ADMINISTRADOR ---
+        // --- 3. COMANDOS DE ADMINISTRADOR ---
         if (isAdmin) {
             if (text === 'dolar') {
                 await actualizarDolar();
@@ -313,40 +341,11 @@ async function startBot() {
             if (text === 'menu' || text === 'hola' || text === 'buen dia') {
                 return await safeSendMessage(from, { text: `⭐ *MODO ADMINISTRADOR*\n\n${MENU_TEXT}` });
             }
-            if (esRIFPuro) {
-                const c = await buscarCliente(rawText.replace(/\s/g, ''));
-                if (c) {
-                    const facturas = await obtenerDetalleFacturas(c.id_cliente);
-                    let totalP = 0; 
-                    let list = `⭐ *CONSULTA MASTER*\nCliente: ${c.nombres}\n\n`;
-                    if (facturas.length === 0) {
-                        list += `✅ Sin facturas pendientes.`;
-                    } else {
-                        facturas.forEach(f => {
-                            const monto = (f.total - f.abono_factura) / (f.porcentaje || 1);
-                            totalP += monto;
-                            list += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n✍️ Firmada: https://www.one4cars.com/uploads/notas/${f.nro_factura}.jpg\n\n`;
-                        });
-                        list += `💰 *Total Máster: $${totalP.toFixed(2)}*`;
-                    }
-                    return await safeSendMessage(from, { text: list });
-                } else {
-                    return await safeSendMessage(from, { text: "❌ No se encontró cliente con ese RIF." });
-                }
-            }
         }
 
-        // --- 3. VENDEDOR / CLIENTE ---
+        // --- 4. VENDEDOR / CLIENTE ---
         if (vendedor && (text === 'menu' || text === 'hola')) {
             return await safeSendMessage(from, { text: `👋 Hola *${vendedor.nombre}*.\n\n${MENU_TEXT}` });
-        }
-
-        if (esRIFPuro && (!sesion || !sesion.id_cliente_int) && !isAdmin) {
-            const c = await buscarCliente(rawText.replace(/\s/g, ''));
-            if (c) {
-                await guardarUsuario(from, rawText.replace(/\s/g, ''), c.id_cliente);
-                return await safeSendMessage(from, { text: `✅ ¡Hola *${c.nombres}*! RIF vinculado.\n\n${MENU_TEXT}` });
-            }
         }
 
         if (text === 'menu') return await safeSendMessage(from, { text: MENU_TEXT });
@@ -368,8 +367,8 @@ async function startBot() {
             return await safeSendMessage(from, { text: listado });
         }
 
-        // --- 4. FALLBACK (Sin IA) ---
-        await safeSendMessage(from, { text: "No pude encontrar ese producto. Por favor, verifica la descripción o escribe *menu* para ver las opciones." });
+        // --- 5. FALLBACK ---
+        await safeSendMessage(from, { text: "No pude encontrar ese producto o comando. Por favor, verifica la descripción o escribe *menu* para ver las opciones." });
     });
 }
 
