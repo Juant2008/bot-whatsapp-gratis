@@ -2,7 +2,6 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
-const url = require('url');
 const pino = require('pino');
 const fs = require('fs');
 const mysql = require('mysql2/promise');
@@ -156,6 +155,11 @@ async function initDB() {
             nivel INT NOT NULL,
             fecha_envio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE KEY uk_recordatorio (id_factura, nivel)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci`);
+
+        await pool.execute(`CREATE TABLE IF NOT EXISTS envio_vendedor_log (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            fecha_envio DATE NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci`);
         
         console.log("✅ Base de Datos vinculada.");
@@ -327,7 +331,6 @@ async function checkFacturasVencidas() {
         const facturas = await notificador.obtenerFacturasVencidas();
         const enviados = await notificador.obtenerRecordatoriosEnviados();
         let cont = 0;
-        const vendedoresMap = {};
 
         for (const f of facturas) {
             const dias = f.dias_vencida;
@@ -339,7 +342,7 @@ async function checkFacturasVencidas() {
 
             const fecha = new Date(f.fecha_reg).toISOString().split('T')[0];
 
-            // CLIENTE: solo una vez por nivel (30, 40, 50, 60)
+            // Solo al cliente, una vez por nivel (30, 40, 50, 60)
             const yaEnviado = enviados[f.id_factura] && enviados[f.id_factura].includes(nivel);
             if (!yaEnviado) {
                 const jid = formatWhatsApp(f.celular);
@@ -351,37 +354,77 @@ async function checkFacturasVencidas() {
                 cont++;
                 await sleep(1000);
             }
-
-            // VENDEDOR: agrupar para enviar resumen consolidado cada 24h
-            if (f.celular_vendedor) {
-                const key = f.celular_vendedor.toString().replace(/\D/g, '');
-                if (!vendedoresMap[key]) {
-                    vendedoresMap[key] = {
-                        nombre: f.vendedor_nombre || 'Vendedor',
-                        jid: formatWhatsApp(f.celular_vendedor),
-                        facturas: []
-                    };
-                }
-                vendedoresMap[key].facturas.push(`🔹 *N° ${f.nro_factura}* - ${f.nombres} - $${monto.toFixed(2)} (${dias} días)`);
-            }
-        }
-
-        // Enviar resumen consolidado a cada vendedor
-        for (const key of Object.keys(vendedoresMap)) {
-            const v = vendedoresMap[key];
-            if (!v.jid) continue;
-            const msgV = `📢 *RESUMEN DE CLIENTES VENCIDOS*\n\nVendedor: *${v.nombre}*\n\n${v.facturas.join('\n')}\n\nLe recordamos la importancia de gestionar estos cobros para mantener la rotación de productos.`;
-            await safeSendMessage(v.jid, { text: msgV });
-            await sleep(1000);
         }
 
         if (cont > 0) {
-            console.log(`[RECORDATORIO] ${cont} cliente(s) notificado(s) + ${Object.keys(vendedoresMap).length} resumen(es) a vendedores.`);
+            console.log(`[RECORDATORIO] ${cont} cliente(s) notificado(s).`);
         }
     } catch (e) {
         console.log("[RECORDATORIO] Error:", e.message);
     } finally {
         recordatorioEjecutando = false;
+    }
+}
+
+// ===== RECORDATORIO A VENDEDORES (cada 3 días, solo días hábiles) =====
+let vendedorEjecutando = false;
+
+async function checkVendedoresRecordatorio() {
+    if (!isBotReady() || vendedorEjecutando) return;
+    vendedorEjecutando = true;
+    try {
+        // 1. Solo días de semana (lunes=1 ... viernes=5)
+        const hoy = new Date().getDay();
+        if (hoy === 0 || hoy === 6) {
+            console.log("[VENDEDORES] Es fin de semana, se omite el envío.");
+            return;
+        }
+
+        // 2. Verificar que hayan pasado al menos 3 días desde el último envío
+        const ultimo = await notificador.obtenerUltimoEnvioVendedor();
+        if (ultimo) {
+            const diff = Math.floor((new Date() - new Date(ultimo)) / 86400000);
+            if (diff < 3) {
+                console.log(`[VENDEDORES] Último envío fue hace ${diff} día(s), se omite (mínimo 3).`);
+                return;
+            }
+        }
+
+        const facturas = await notificador.obtenerFacturasVencidasAll();
+        const vendedoresMap = {};
+
+        for (const f of facturas) {
+            const dias = f.dias_vencida;
+            if (dias < 30) continue;
+
+            const monto = (parseFloat(f.total) - parseFloat(f.abono_factura || 0)) / (parseFloat(f.porcentaje) || 1);
+            if (monto <= 0 || !f.celular_vendedor) continue;
+
+            const key = f.celular_vendedor.toString().replace(/\D/g, '');
+            if (!vendedoresMap[key]) {
+                vendedoresMap[key] = {
+                    nombre: f.vendedor_nombre || 'Vendedor',
+                    jid: formatWhatsApp(f.celular_vendedor),
+                    facturas: []
+                };
+            }
+            vendedoresMap[key].facturas.push(`🔹 *N° ${f.nro_factura}* - ${f.nombres} - $${monto.toFixed(2)} (${dias} días)`);
+        }
+
+        for (const key of Object.keys(vendedoresMap)) {
+            const v = vendedoresMap[key];
+            if (!v.jid || v.facturas.length === 0) continue;
+            const msg = `📢 *RESUMEN DE CLIENTES VENCIDOS*\n\nVendedor: *${v.nombre}*\n\n${v.facturas.join('\n')}\n\nLe recordamos la importancia de gestionar estos cobros para mantener la rotación de productos.`;
+            await safeSendMessage(v.jid, { text: msg });
+            await sleep(1000);
+        }
+
+        await notificador.marcarEnvioVendedor();
+        console.log(`[VENDEDORES] ${Object.keys(vendedoresMap).length} vendedor(es) notificado(s).`);
+    } catch (e) {
+        console.log("[VENDEDORES] Error:", e.message);
+    } finally {
+        vendedorEjecutando = false;
     }
 }
 
@@ -419,6 +462,7 @@ async function startBot() {
             if (!notificadorInterval) {
                 notificadorInterval = setInterval(checkNuevasFacturas, 45000);
                 setInterval(checkFacturasVencidas, 86400000);
+                setInterval(checkVendedoresRecordatorio, 86400000);
                 setInterval(() => {
                     if (!isBotReady() && socketBot) {
                         console.log("[BOT] Health check: reconectando...");
@@ -562,29 +606,32 @@ async function startBot() {
 
 // ===== SERVIDOR HTTP =====
 const server = http.createServer(async (req, res) => {
-    const parsedUrl = url.parse(req.url, true);
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const query = Object.fromEntries(parsedUrl.searchParams.entries());
     const header = `<nav class="navbar navbar-dark bg-dark mb-4 shadow"><div class="container"><a class="navbar-brand fw-bold" href="/">ONE4CARS ADMIN</a></div></nav>`;
+    
+    const routename = parsedUrl.pathname;
 
-    if (parsedUrl.pathname === '/cobranza') {
+    if (routename === '/cobranza') {
         const v = await cobranza.obtenerVendedores();
         const z = await cobranza.obtenerZonas();
-        const d = await cobranza.obtenerListaDeudores(parsedUrl.query);
-        res.end(await cobranza.generarHTML(v, z, d, header, parsedUrl.query));
-    } else if (parsedUrl.pathname === '/marketing-panel') {
+        const d = await cobranza.obtenerListaDeudores(query);
+        res.end(await cobranza.generarHTML(v, z, d, header, query));
+    } else if (routename === '/marketing-panel') {
         const v = await marketingModulo.obtenerVendedores();
         const z = await marketingModulo.obtenerZonas();
-        const c = await marketingModulo.obtenerClientesMarketing(parsedUrl.query);
+        const c = await marketingModulo.obtenerClientesMarketing(query);
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
-        res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, parsedUrl.query));
-    } else if (parsedUrl.pathname === '/marketing-preview') {
+        res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, query));
+    } else if (routename === '/marketing-preview') {
         let sql = "SELECT id_cliente, nombres, celular FROM tab_clientes WHERE celular IS NOT NULL AND celular != ''";
         const params = [];
-        if (parsedUrl.query.vendedor) { sql += " AND vendedor = ?"; params.push(parsedUrl.query.vendedor); }
-        if (parsedUrl.query.zona) { sql += " AND zona = ?"; params.push(parsedUrl.query.zona); }
+        if (query.vendedor) { sql += " AND vendedor = ?"; params.push(query.vendedor); }
+        if (query.zona) { sql += " AND zona = ?"; params.push(query.zona); }
         const [clientes] = await pool.execute(sql, params);
         res.writeHead(200, {'Content-Type': 'application/json'});
         res.end(JSON.stringify(clientes));
-    } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
+    } else if (routename === '/enviar-marketing' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
@@ -606,7 +653,7 @@ const server = http.createServer(async (req, res) => {
             }
             res.end("OK");
         });
-    } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
+    } else if (routename === '/enviar-cobranza' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
@@ -626,7 +673,7 @@ const server = http.createServer(async (req, res) => {
             }
             res.end("OK");
         });
-    } else if (parsedUrl.pathname === '/reset-sesion') {
+    } else if (routename === '/reset-sesion') {
         try {
             if (fs.existsSync('auth_info')) {
                 fs.rmSync('auth_info', { recursive: true, force: true });
@@ -647,7 +694,7 @@ const server = http.createServer(async (req, res) => {
         } catch (e) {
             res.end("Error al borrar sesión: " + e.message);
         }
-    } else if (parsedUrl.pathname === '/notificador-estado') {
+    } else if (routename === '/notificador-estado') {
         const total = await notificador.obtenerFacturasNoNotificadasCount();
         res.end(`<!DOCTYPE html>
         <html lang="es">
@@ -670,7 +717,7 @@ const server = http.createServer(async (req, res) => {
                 </div>
             </div>
         </body></html>`);
-    } else if (parsedUrl.pathname === '/recordatorio-estado') {
+    } else if (routename === '/recordatorio-estado') {
         const facturas = await notificador.obtenerFacturasVencidas();
         const enviados = await notificador.obtenerRecordatoriosEnviados();
         const hoy = new Date();
@@ -705,7 +752,7 @@ const server = http.createServer(async (req, res) => {
                         }).join('')}
                         </tbody>
                     </table>
-                    <p class="text-muted small">Los recordatorios se envían cada 6 horas automáticamente.</p>
+                    <p class="text-muted small">Clientes: notificación única por nivel (30, 40, 50, 60 días). Vendedores: resumen cada 3 días hábiles.</p>
                     <a href="/" class="btn btn-outline-secondary">Volver</a>
                 </div>
             </div>
