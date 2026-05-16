@@ -28,7 +28,48 @@ async function obtenerFacturasNoNotificadasCount() {
     return rows[0].total;
 }
 
+// ===== RECORDATORIOS POR VENCIMIENTO =====
+async function obtenerFacturasVencidas() {
+    const conn = await mysql.createConnection(dbConfig);
+    const [rows] = await conn.execute(
+        `SELECT f.id_factura, f.nro_factura, f.nombres, f.celular, f.total, f.abono_factura,
+                f.porcentaje, f.fecha_reg, f.id_cliente, f.id_vendedor,
+                v.celular_vendedor, v.nombre as vendedor_nombre,
+                DATEDIFF(CURDATE(), f.fecha_reg) as dias_vencida
+         FROM tab_facturas f
+         LEFT JOIN tab_vendedores v ON f.id_vendedor = v.id_vendedor
+         WHERE f.pagada = 'NO' AND f.anulado = 'no'
+           AND f.fecha_reg <= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+         ORDER BY f.fecha_reg ASC`
+    );
+    await conn.end();
+    return rows;
+}
+
+async function obtenerRecordatoriosEnviados() {
+    const conn = await mysql.createConnection(dbConfig);
+    const [rows] = await conn.execute("SELECT id_factura, nivel FROM recordatorios_log");
+    await conn.end();
+    const map = {};
+    for (const r of rows) {
+        if (!map[r.id_factura]) map[r.id_factura] = [];
+        map[r.id_factura].push(r.nivel);
+    }
+    return map;
+}
+
+async function marcarRecordatorio(id_factura, nivel) {
+    const conn = await mysql.createConnection(dbConfig);
+    try {
+        await conn.execute("INSERT INTO recordatorios_log (id_factura, nivel) VALUES (?, ?)", [id_factura, nivel]);
+    } catch (e) {}
+    await conn.end();
+}
+
 module.exports = {
     obtenerFacturasNoNotificadas,
-    obtenerFacturasNoNotificadasCount
+    obtenerFacturasNoNotificadasCount,
+    obtenerFacturasVencidas,
+    obtenerRecordatoriosEnviados,
+    marcarRecordatorio
 };
