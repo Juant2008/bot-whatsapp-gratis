@@ -38,8 +38,10 @@ async function obtenerFacturasVencidas() {
                 DATEDIFF(CURDATE(), f.fecha_reg) as dias_vencida
          FROM tab_facturas f
          LEFT JOIN tab_vendedores v ON f.id_vendedor = v.id_vendedor
+         LEFT JOIN tab_clientes c ON f.id_cliente = c.id_cliente
          WHERE f.pagada = 'NO' AND f.anulado = 'no'
            AND f.fecha_reg <= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+           AND (c.cliente_oficina IS NULL OR c.cliente_oficina != 'SI')
          ORDER BY f.fecha_reg ASC`
     );
     await conn.end();
