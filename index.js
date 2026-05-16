@@ -1,22 +1,22 @@
-const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, initCreds } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
-const url = require('url');
 const pino = require('pino');
 const fs = require('fs');
 const mysql = require('mysql2/promise');
 const axios = require('axios');
+const crypto = require('crypto');
 
 // MODULOS EXTERNOS
 const cobranza = require('./cobranza');
 const marketingModulo = require('./marketing'); 
-const notificador = require('./notificador'); // <--- INSERTADO: Módulo de notificaciones
+const notificador = require('./notificador'); // <--- Módulo de notificaciones
 
 // CONFIGURACION
 const PORT = process.env.PORT || 10000;
 
-// LISTA DE ADMINISTRADORES (Los 3 IDs autorizados)
+// LISTA DE ADMINISTRADORES (Los 4 IDs autorizados)
 const ADMIN_IDS = ["228621243408492", "97899534934200", "584142531553", "250370957778958"];
 
 const pool = mysql.createPool({
@@ -50,7 +50,30 @@ let socketBot = null;
 let dolarInfo = { bcv: 'Cargando...', paralelo: 'Cargando...' };
 
 // ==========================================================================
-// CORREGIDO: GESTIÓN DE SESIÓN EN MYSQL (Sustituye a useMultiFileAuthState)
+// FUNCIÓN AUXILIAR PARA CREDENCIALES (PARA EVITAR EL ERROR initCreds)
+// ==========================================================================
+function getInitialCreds() {
+    return {
+        noiseKey: crypto.generateKeyPairSync('curve25519', { publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } }),
+        signedIdentityKey: crypto.generateKeyPairSync('curve25519', { publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } }),
+        signedPreKey: { keyPair: crypto.generateKeyPairSync('curve25519', { publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } }), signature: Buffer.alloc(64), keyId: 1 },
+        registrationId: Math.floor(Math.random() * 10000),
+        advSecretKey: crypto.randomBytes(32).toString('base64'),
+        nextPreKeyId: 1,
+        firstUnackedPreKeyId: 1,
+        serverHasPreKey: false,
+        accountSyncCounter: 0,
+        accountSettings: { unarchiveChats: false },
+        registered: false,
+        registration: {},
+        pairingCode: undefined,
+        lastPropHash: undefined,
+        hasAccountSignature: false,
+    };
+}
+
+// ==========================================================================
+// GESTIÓN DE SESIÓN EN MYSQL
 // ==========================================================================
 async function useMySQLAuthState(pool) {
     const loadCreds = async () => {
@@ -60,9 +83,11 @@ async function useMySQLAuthState(pool) {
                 return JSON.parse(rows[0].data);
             }
         } catch (e) {
-            console.log("Iniciando nuevas credenciales...");
+            console.log("Error cargando sesión de DB, creando nueva.");
         }
-        return initCreds(); // Evita el error 'me' de null
+        // Intentar usar initCreds de la librería si está disponible, sino el fallback manual
+        const Baileys = require('@whiskeysockets/baileys');
+        return Baileys.initCreds ? Baileys.initCreds() : getInitialCreds();
     };
 
     const saveCreds = async (creds) => {
@@ -80,9 +105,7 @@ async function useMySQLAuthState(pool) {
                     const data = {};
                     for (const id of ids) {
                         const [rows] = await pool.execute("SELECT value FROM whatsapp_keys WHERE id = ?", [`${type}:${id}`]);
-                        if (rows.length > 0) {
-                            data[id] = JSON.parse(rows[0].value);
-                        }
+                        if (rows.length > 0) data[id] = JSON.parse(rows[0].value);
                     }
                     return data;
                 }, 
@@ -102,9 +125,8 @@ async function useMySQLAuthState(pool) {
         saveCreds
     };
 }
-// ==========================================================================
 
-// ===== FUNCIONES DE APOYO (MANTENIDAS EXACTAMENTE IGUAL) =====
+// ===== FUNCIONES DE APOYO =====
 
 function normalizar(texto) {
     return texto
@@ -173,7 +195,7 @@ async function buscarVendedor(jid, pushName) {
     return r[0] || null;
 }
 
-// ===== BASE DE DATOS (CORREGIDO PARA INCLUIR TABLAS DE SESIÓN) =====
+// ===== BASE DE DATOS =====
 async function initDB() {
     try {
         await pool.execute(`CREATE TABLE IF NOT EXISTS control_chat (
@@ -192,15 +214,8 @@ async function initDB() {
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci`);
 
-        // TABLAS NECESARIAS PARA LA SESIÓN
-        await pool.execute(`CREATE TABLE IF NOT EXISTS whatsapp_session (
-            id VARCHAR(255) PRIMARY KEY,
-            data JSON
-        )`);
-        await pool.execute(`CREATE TABLE IF NOT EXISTS whatsapp_keys (
-            id VARCHAR(255) PRIMARY KEY,
-            value JSON
-        )`);
+        await pool.execute(`CREATE TABLE IF NOT EXISTS whatsapp_session (id VARCHAR(255) PRIMARY KEY, data JSON)`);
+        await pool.execute(`CREATE TABLE IF NOT EXISTS whatsapp_keys (id VARCHAR(255) PRIMARY KEY, value JSON)`);
         
         console.log("✅ Base de Datos vinculada.");
     } catch (e) { console.log("❌ Error DB Init:", e.message); }
@@ -308,11 +323,6 @@ async function startBot() {
         if (connection === 'open') { 
             qrCodeData = "ONLINE ✅"; 
             console.log("🚀 BOT MASTER ONLINE"); 
-
-            // ==========================================
-            // INSERTADO: INICIO DEL NOTIFICADOR AUTOMÁTICO
-            // ==========================================
-            console.log("⏰ Iniciando ciclo de notificaciones automáticas...");
             notificador.procesarFacturas(sock, pool); 
             setInterval(() => notificador.procesarFacturas(sock, pool), notificador.INTERVALO_REVISION);
         }
@@ -447,31 +457,32 @@ async function startBot() {
     });
 }
 
-// ===== SERVIDOR HTTP (MANTENIDO EXACTAMENTE IGUAL) =====
+// ===== SERVIDOR HTTP =====
 const server = http.createServer(async (req, res) => {
-    const parsedUrl = url.parse(req.url, true);
+    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+    const query = Object.fromEntries(reqUrl.searchParams);
     const header = `<nav class="navbar navbar-dark bg-dark mb-4 shadow"><div class="container"><a class="navbar-brand fw-bold" href="/">ONE4CARS ADMIN</a></div></nav>`;
 
-    if (parsedUrl.pathname === '/cobranza') {
+    if (reqUrl.pathname === '/cobranza') {
         const v = await cobranza.obtenerVendedores();
         const z = await cobranza.obtenerZonas();
-        const d = await cobranza.obtenerListaDeudores(parsedUrl.query);
-        res.end(await cobranza.generarHTML(v, z, d, header, parsedUrl.query));
-    } else if (parsedUrl.pathname === '/marketing-panel') {
+        const d = await cobranza.obtenerListaDeudores(query);
+        res.end(await cobranza.generarHTML(v, z, d, header, query));
+    } else if (reqUrl.pathname === '/marketing-panel') {
         const v = await marketingModulo.obtenerVendedores();
         const z = await marketingModulo.obtenerZonas();
-        const c = await marketingModulo.obtenerClientesMarketing(parsedUrl.query);
+        const c = await marketingModulo.obtenerClientesMarketing(query);
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
-        res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, parsedUrl.query));
-    } else if (parsedUrl.pathname === '/marketing-preview') {
+        res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, query));
+    } else if (reqUrl.pathname === '/marketing-preview') {
         let sql = "SELECT id_cliente, nombres, celular FROM tab_clientes WHERE celular IS NOT NULL AND celular != ''";
         const params = [];
-        if (parsedUrl.query.vendedor) { sql += " AND vendedor = ?"; params.push(parsedUrl.query.vendedor); }
-        if (parsedUrl.query.zona) { sql += " AND zona = ?"; params.push(parsedUrl.query.zona); }
+        if (query.vendedor) { sql += " AND vendedor = ?"; params.push(query.vendedor); }
+        if (query.zona) { sql += " AND zona = ?"; params.push(query.zona); }
         const [clientes] = await pool.execute(sql, params);
         res.writeHead(200, {'Content-Type': 'application/json'});
         res.end(JSON.stringify(clientes));
-    } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
+    } else if (reqUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
@@ -493,7 +504,7 @@ const server = http.createServer(async (req, res) => {
             }
             res.end("OK");
         });
-    } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
+    } else if (reqUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
