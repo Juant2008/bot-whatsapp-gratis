@@ -11,12 +11,10 @@ const axios = require('axios');
 // MODULOS EXTERNOS
 const cobranza = require('./cobranza');
 const marketingModulo = require('./marketing'); 
-const notificador = require('./notificador'); // <--- INTEGRACIÓN NOTIFICADOR
+const notificador = require('./notificador');
 
 // CONFIGURACION
 const PORT = process.env.PORT || 10000;
-
-// LISTA DE ADMINISTRADORES (Los 3 IDs autorizados)
 const ADMIN_IDS = ["228621243408492", "97899534934200", "584142531553", "250370957778958"];
 
 const pool = mysql.createPool({
@@ -50,37 +48,47 @@ let socketBot = null;
 let dolarInfo = { bcv: 'Cargando...', paralelo: 'Cargando...' };
 
 // ==========================================
-// NUEVA FUNCIÓN: SESIÓN EN MYSQL (ANTI-AMNESIA)
+// FUNCIÓN CORREGIDA: SESIÓN EN MYSQL
 // ==========================================
 async function useMySQLAuthState(pool) {
     const loadCreds = async () => {
-        const [rows] = await pool.execute("SELECT data FROM whatsapp_session WHERE id = 'session_main'");
-        return rows.length > 0 ? JSON.parse(rows[0].data) : null;
+        try {
+            const [rows] = await pool.execute("SELECT data FROM whatsapp_session WHERE id = 'session_main'");
+            // CORRECCIÓN: Si no hay filas, devolvemos un objeto vacío {} en lugar de null
+            return rows.length > 0 ? JSON.parse(rows[0].data) : {}; 
+        } catch (e) {
+            console.log("Error cargando credenciales, iniciando sesión nueva...");
+            return {};
+        }
     };
+
     const saveCreds = async (creds) => {
-        await pool.execute(
-            "INSERT INTO whatsapp_session (id, data) VALUES ('session_main', ?) ON DUPLICATE KEY UPDATE data = VALUES(data)", 
-            [JSON.stringify(creds)]
-        );
+        try {
+            await pool.execute(
+                "INSERT INTO whatsapp_session (id, data) VALUES ('session_main', ?) ON DUPLICATE KEY UPDATE data = VALUES(data)", 
+                [JSON.stringify(creds)]
+            );
+        } catch (e) {
+            console.error("Error guardando credenciales en DB:", e.message);
+        }
     };
+
     return {
         state: { 
             creds: await loadCreds(), 
-            keys: { get: async () => ({}), set: async () => {} } 
+            keys: { 
+                get: async (type, ids) => { return {}; }, 
+                set: async (type, ids, value) => { return; } 
+            } 
         },
         saveCreds
     };
 }
 
-// ===== FUNCIONES DE APOYO (MANTENIDAS IGUAL) =====
+// ===== FUNCIONES DE APOYO (MANTENIDAS) =====
 
 function normalizar(texto) {
-    return texto
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "") 
-        .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?!]/g, "") 
-        .toLowerCase()
-        .trim();
+    return texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?!]/g, "").toLowerCase().trim();
 }
 
 function limpiarRIF(texto) {
@@ -95,9 +103,8 @@ async function safeSendMessage(jid, content) {
     try {
         if (!socketBot) throw new Error("Socket no inicializado");
         await socketBot.sendMessage(jid, content);
-        console.log(`[MSG] ✅ Mensaje enviado a ${jid}`);
     } catch (e) {
-        console.log(`[MSG] ❌ Error enviando mensaje:`, e.message);
+        console.log(`[MSG] ❌ Error:`, e.message);
     }
 }
 
@@ -141,7 +148,7 @@ async function buscarVendedor(jid, pushName) {
     return r[0] || null;
 }
 
-// ===== BASE DE DATOS (MANTENIDAS IGUAL) =====
+// ===== BASE DE DATOS =====
 async function initDB() {
     try {
         await pool.execute(`CREATE TABLE IF NOT EXISTS control_chat (
@@ -189,10 +196,7 @@ async function buscarCliente(rifLimpio) {
 async function buscarProductoPorTexto(texto) {
     const txtNormal = normalizar(texto);
     const stopWords = ['tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde', 'precio', 'tienen', 'el', 'una', 'un', 'hay', 'si', 'es', 'de', 'con', 'para', 'busco'];
-    
-    const palabras = txtNormal.split(' ')
-        .filter(p => p.length > 2 && !stopWords.includes(p));
-        
+    const palabras = txtNormal.split(' ').filter(p => p.length > 2 && !stopWords.includes(p));
     if (palabras.length === 0) return null;
 
     let query = "SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE ";
@@ -203,16 +207,6 @@ async function buscarProductoPorTexto(texto) {
         const [rows] = await pool.execute(query + conditions + " LIMIT 5", params);
         if (rows.length > 0) return rows;
     } catch (e) { console.log("Error SQL 1:", e); }
-
-    if (palabras.length > 2) {
-        const pFlex = palabras.slice(0, 2);
-        const cFlex = pFlex.map(() => "descripcion LIKE ?").join(" AND ");
-        const vFlex = pFlex.map(p => `%${p}%`);
-        try {
-            const [rows] = await pool.execute(query + cFlex + " LIMIT 5", vFlex);
-            if (rows.length > 0) return rows;
-        } catch (e) {}
-    }
 
     try {
         const [rows] = await pool.execute("SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE descripcion LIKE ? LIMIT 5", [`%${txtNormal}%`]);
@@ -246,7 +240,6 @@ async function actualizarDolar() {
 
 // ===== BOT WHATSAPP =====
 async function startBot() {
-    // CAMBIO: Usamos la sesión de MySQL en lugar de archivos locales
     const { state, saveCreds } = await useMySQLAuthState(pool);
     const { version } = await fetchLatestBaileysVersion();
 
@@ -267,14 +260,8 @@ async function startBot() {
         if (connection === 'open') { 
             qrCodeData = "ONLINE ✅"; 
             console.log("🚀 BOT MASTER ONLINE"); 
-
-            // ==========================================
-            // INTEGRACIÓN NOTIFICADOR AUTOMÁTICO
-            // ==========================================
-            console.log("⏰ Iniciando ciclo de notificaciones automáticas...");
-            notificador.procesarFacturas(sock, pool); // Ejecución inmediata
+            notificador.procesarFacturas(sock, pool);
             setInterval(() => notificador.procesarFacturas(sock, pool), notificador.INTERVALO_REVISION);
-            // ==========================================
         }
         if (connection === 'close') {
             const r = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -316,7 +303,6 @@ async function startBot() {
         const sesion = await getSesion(from);
         if (sesion && sesion.modo === 'humano' && !isAdmin) return;
 
-        // --- 1. LÓGICA DE RIF (RESTRINGIDA SOLO A ADMINS) ---
         if (isAdmin && esRIFPuro) {
             const rifLimpio = limpiarRIF(rawText);
             const c = await buscarCliente(rifLimpio);
@@ -325,7 +311,6 @@ async function startBot() {
                 const facturas = await obtenerDetalleFacturas(c.id_cliente);
                 let totalP = 0; 
                 let list = `⭐ *CONSULTA DE ESTADO DE CUENTA (ADMIN)*\nCliente: ${c.nombres}\nRIF: ${rifLimpio}\n\n`;
-                
                 if (facturas.length === 0) {
                     list += `✅ Sin facturas pendientes.`;
                 } else {
@@ -343,24 +328,20 @@ async function startBot() {
             }
         }
 
-        // --- 2. LÓGICA DE PRODUCTOS (Para todos) ---
         if (text !== 'menu' && text !== 'hola') {
             try {
                 const prods = await buscarProductoPorTexto(rawText);
                 if (prods) {
                     let generalText = `✅ ¡Hola ${pushName}! Encontramos los siguientes productos relacionados:\n\n`;
-                    
                     prods.forEach(p => {
                         const precioLimpio = parseFloat(p.precio_final || 0).toFixed(2);
                         generalText += `📦 *CÓDIGO: ${p.producto}*\n💰 *Precio Final: $${precioLimpio}*\n📝 ${p.descripcion}\n🔗 Ficha: https://one4cars.com/producto_general.php?cod=${p.producto}&tipo=${encodeURIComponent(p.tipo)}\n\n`;
                     });
-
                     for (let i = 0; i < prods.length; i++) {
                         const p = prods[i];
                         const imgUrl = `https://one4cars.com/imagen/${p.producto}.jpg`;
                         const precioLimpio = parseFloat(p.precio_final || 0).toFixed(2);
                         const caption = (i === 0) ? generalText : `📦 *CÓDIGO: ${p.producto}*\n💰 *Precio Final: $${precioLimpio}*`;
-
                         try {
                             await socketBot.sendMessage(from, { image: { url: imgUrl }, caption: caption });
                         } catch (imgErr) {
@@ -372,7 +353,6 @@ async function startBot() {
             } catch (e) { console.log("Error en flujo de productos:", e); }
         }
 
-        // --- 3. COMANDOS DE ADMINISTRADOR ---
         if (isAdmin) {
             if (text === 'dolar') {
                 await actualizarDolar();
@@ -383,7 +363,6 @@ async function startBot() {
             }
         }
 
-        // --- 4. VENDEDOR / CLIENTE ---
         if (vendedor && (text === 'menu' || text === 'hola')) {
             return await safeSendMessage(from, { text: `👋 Hola *${vendedor.nombre}*.\n\n${MENU_TEXT}` });
         }
@@ -407,12 +386,11 @@ async function startBot() {
             return await safeSendMessage(from, { text: listado });
         }
 
-        // --- 5. FALLBACK ---
         await safeSendMessage(from, { text: "No pude encontrar ese producto o comando. Por favor, verifica la descripción o escribe *menu* para ver las opciones." });
     });
 }
 
-// ===== SERVIDOR HTTP (MANTENIDO IGUAL) =====
+// ===== SERVIDOR HTTP =====
 const server = http.createServer(async (req, res) => {
     const parsedUrl = url.parse(req.url, true);
     const header = `<nav class="navbar navbar-dark bg-dark mb-4 shadow"><div class="container"><a class="navbar-brand fw-bold" href="/">ONE4CARS ADMIN</a></div></nav>`;
@@ -428,14 +406,6 @@ const server = http.createServer(async (req, res) => {
         const c = await marketingModulo.obtenerClientesMarketing(parsedUrl.query);
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
         res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, parsedUrl.query));
-    } else if (parsedUrl.pathname === '/marketing-preview') {
-        let sql = "SELECT id_cliente, nombres, celular FROM tab_clientes WHERE celular IS NOT NULL AND celular != ''";
-        const params = [];
-        if (parsedUrl.query.vendedor) { sql += " AND vendedor = ?"; params.push(parsedUrl.query.vendedor); }
-        if (parsedUrl.query.zona) { sql += " AND zona = ?"; params.push(parsedUrl.query.zona); }
-        const [clientes] = await pool.execute(sql, params);
-        res.writeHead(200, {'Content-Type': 'application/json'});
-        res.end(JSON.stringify(clientes));
     } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
