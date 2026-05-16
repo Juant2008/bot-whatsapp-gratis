@@ -10,7 +10,12 @@ const dbConfig = {
 async function obtenerFacturasNoNotificadas() {
     const conn = await mysql.createConnection(dbConfig);
     const [rows] = await conn.execute(
-        "SELECT id_factura, nro_factura, nombres, celular, total, fecha_reg, id_cliente FROM tab_facturas WHERE whatsapp_notificado = 'NO'  AND pagada = 'NO'  AND anulado = 'no' ORDER BY id_factura ASC"
+        `SELECT f.id_factura, f.nro_factura, f.nombres, f.celular, f.total, f.fecha_reg, f.id_cliente, f.id_vendedor,
+                v.celular_vendedor, v.nombre as vendedor_nombre
+         FROM tab_facturas f
+         LEFT JOIN tab_vendedores v ON f.id_vendedor = v.id_vendedor
+         WHERE f.whatsapp_notificado = 'NO' AND f.anulado = 'no'
+         ORDER BY f.id_factura ASC`
     );
     await conn.end();
     return rows;
@@ -24,7 +29,7 @@ async function marcarNotificada(id_factura) {
 
 async function obtenerFacturasNoNotificadasCount() {
     const conn = await mysql.createConnection(dbConfig);
-    const [rows] = await conn.execute("SELECT COUNT(*) as total FROM tab_facturas WHERE whatsapp_notificado = 'NO' AND anulado = 'no'");
+    const [rows] = await conn.execute("SELECT COUNT(*) as total FROM tab_facturas WHERE whatsapp_notificado = 'NO' AND pagada = 'NO' AND anulado = 'no'");
     await conn.end();
     return rows[0].total;
 }
