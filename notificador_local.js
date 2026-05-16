@@ -48,6 +48,23 @@ async function obtenerFacturasVencidas() {
     return rows;
 }
 
+async function obtenerFacturasVencidasAll() {
+    const conn = await mysql.createConnection(dbConfig);
+    const [rows] = await conn.execute(
+        `SELECT f.id_factura, f.nro_factura, f.nombres, f.celular, f.total, f.abono_factura,
+                f.porcentaje, f.fecha_reg, f.id_cliente, f.id_vendedor,
+                v.celular_vendedor, v.nombre as vendedor_nombre,
+                DATEDIFF(CURDATE(), f.fecha_reg) as dias_vencida
+         FROM tab_facturas f
+         LEFT JOIN tab_vendedores v ON f.id_vendedor = v.id_vendedor
+         WHERE f.pagada = 'NO' AND f.anulado = 'no'
+           AND f.fecha_reg <= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+         ORDER BY f.fecha_reg ASC`
+    );
+    await conn.end();
+    return rows;
+}
+
 async function obtenerRecordatoriosEnviados() {
     const conn = await mysql.createConnection(dbConfig);
     const [rows] = await conn.execute("SELECT id_factura, nivel FROM recordatorios_log");
@@ -68,10 +85,27 @@ async function marcarRecordatorio(id_factura, nivel) {
     await conn.end();
 }
 
+// ===== CONTROL ENVÍO A VENDEDORES (cada 3 días, solo días hábiles) =====
+async function obtenerUltimoEnvioVendedor() {
+    const conn = await mysql.createConnection(dbConfig);
+    const [rows] = await conn.execute("SELECT MAX(fecha_envio) as ultimo FROM envio_vendedor_log");
+    await conn.end();
+    return rows[0].ultimo || null;
+}
+
+async function marcarEnvioVendedor() {
+    const conn = await mysql.createConnection(dbConfig);
+    await conn.execute("INSERT INTO envio_vendedor_log (fecha_envio) VALUES (CURDATE())");
+    await conn.end();
+}
+
 module.exports = {
     obtenerFacturasNoNotificadas,
     obtenerFacturasNoNotificadasCount,
     obtenerFacturasVencidas,
+    obtenerFacturasVencidasAll,
     obtenerRecordatoriosEnviados,
-    marcarRecordatorio
+    marcarRecordatorio,
+    obtenerUltimoEnvioVendedor,
+    marcarEnvioVendedor
 };
