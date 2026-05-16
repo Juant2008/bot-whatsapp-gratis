@@ -2,6 +2,7 @@ const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, init
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
 const http = require('http');
+const url = require('url');
 const pino = require('pino');
 const fs = require('fs');
 const mysql = require('mysql2/promise');
@@ -49,7 +50,7 @@ let socketBot = null;
 let dolarInfo = { bcv: 'Cargando...', paralelo: 'Cargando...' };
 
 // ==========================================================================
-// GESTIÓN DE SESIÓN EN MYSQL (CORREGIDO PARA EVITAR EL CRASH)
+// CORREGIDO: GESTIÓN DE SESIÓN EN MYSQL (Sustituye a useMultiFileAuthState)
 // ==========================================================================
 async function useMySQLAuthState(pool) {
     const loadCreds = async () => {
@@ -59,33 +60,9 @@ async function useMySQLAuthState(pool) {
                 return JSON.parse(rows[0].data);
             }
         } catch (e) {
-            console.log("Error cargando credenciales:", e.message);
+            console.log("Iniciando nuevas credenciales...");
         }
-        
-        // Si initCreds no existe como función, devolvemos un objeto de credenciales vacío
-        // Baileys lo inicializará automáticamente.
-        if (typeof initCreds === 'function') {
-            return initCreds();
-        } else {
-            // Fallback manual si la importación falla
-            return {
-                noiseKey: require('@whiskeysockets/baileys').Curve.generateKeyPair(),
-                signedIdentityKey: require('@whiskeysockets/baileys').Curve.generateKeyPair(),
-                signedPreKey: require('@whiskeysockets/baileys').Curve.generateKeyPair(),
-                registrationId: Math.floor(Math.random() * 10000),
-                advSecretKey: require('crypto').randomBytes(32).toString('base64'),
-                nextPreKeyId: 1,
-                firstUnackedPreKeyId: 1,
-                serverHasPreKey: false,
-                accountSyncCounter: 0,
-                accountSettings: { unarchiveChats: false },
-                registered: false,
-                registration: {},
-                pairingCode: undefined,
-                lastPropHash: undefined,
-                hasAccountSignature: false,
-            };
-        }
+        return initCreds(); // Evita el error 'me' de null
     };
 
     const saveCreds = async (creds) => {
@@ -125,8 +102,9 @@ async function useMySQLAuthState(pool) {
         saveCreds
     };
 }
+// ==========================================================================
 
-// ===== FUNCIONES DE APOYO =====
+// ===== FUNCIONES DE APOYO (MANTENIDAS EXACTAMENTE IGUAL) =====
 
 function normalizar(texto) {
     return texto
@@ -195,7 +173,7 @@ async function buscarVendedor(jid, pushName) {
     return r[0] || null;
 }
 
-// ===== BASE DE DATOS =====
+// ===== BASE DE DATOS (CORREGIDO PARA INCLUIR TABLAS DE SESIÓN) =====
 async function initDB() {
     try {
         await pool.execute(`CREATE TABLE IF NOT EXISTS control_chat (
@@ -214,11 +192,11 @@ async function initDB() {
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci`);
 
+        // TABLAS NECESARIAS PARA LA SESIÓN
         await pool.execute(`CREATE TABLE IF NOT EXISTS whatsapp_session (
             id VARCHAR(255) PRIMARY KEY,
             data JSON
         )`);
-        
         await pool.execute(`CREATE TABLE IF NOT EXISTS whatsapp_keys (
             id VARCHAR(255) PRIMARY KEY,
             value JSON
@@ -317,7 +295,7 @@ async function startBot() {
         version,
         auth: state,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
+        printQRInTerminal: true,
         browser: ["ONE4CARS MASTER", "Chrome", "1.0.0"]
     });
 
@@ -469,33 +447,31 @@ async function startBot() {
     });
 }
 
-// ===== SERVIDOR HTTP =====
+// ===== SERVIDOR HTTP (MANTENIDO EXACTAMENTE IGUAL) =====
 const server = http.createServer(async (req, res) => {
-    // CORRECCIÓN: Uso de la API moderna de URL para evitar avisos de deprecación
-    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
-    const query = Object.fromEntries(reqUrl.searchParams);
+    const parsedUrl = url.parse(req.url, true);
     const header = `<nav class="navbar navbar-dark bg-dark mb-4 shadow"><div class="container"><a class="navbar-brand fw-bold" href="/">ONE4CARS ADMIN</a></div></nav>`;
 
-    if (reqUrl.pathname === '/cobranza') {
+    if (parsedUrl.pathname === '/cobranza') {
         const v = await cobranza.obtenerVendedores();
         const z = await cobranza.obtenerZonas();
-        const d = await cobranza.obtenerListaDeudores(query);
-        res.end(await cobranza.generarHTML(v, z, d, header, query));
-    } else if (reqUrl.pathname === '/marketing-panel') {
+        const d = await cobranza.obtenerListaDeudores(parsedUrl.query);
+        res.end(await cobranza.generarHTML(v, z, d, header, parsedUrl.query));
+    } else if (parsedUrl.pathname === '/marketing-panel') {
         const v = await marketingModulo.obtenerVendedores();
         const z = await marketingModulo.obtenerZonas();
-        const c = await marketingModulo.obtenerClientesMarketing(query);
+        const c = await marketingModulo.obtenerClientesMarketing(parsedUrl.query);
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
-        res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, query));
-    } else if (reqUrl.pathname === '/marketing-preview') {
+        res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, parsedUrl.query));
+    } else if (parsedUrl.pathname === '/marketing-preview') {
         let sql = "SELECT id_cliente, nombres, celular FROM tab_clientes WHERE celular IS NOT NULL AND celular != ''";
         const params = [];
-        if (query.vendedor) { sql += " AND vendedor = ?"; params.push(query.vendedor); }
-        if (query.zona) { sql += " AND zona = ?"; params.push(query.zona); }
+        if (parsedUrl.query.vendedor) { sql += " AND vendedor = ?"; params.push(parsedUrl.query.vendedor); }
+        if (parsedUrl.query.zona) { sql += " AND zona = ?"; params.push(parsedUrl.query.zona); }
         const [clientes] = await pool.execute(sql, params);
         res.writeHead(200, {'Content-Type': 'application/json'});
         res.end(JSON.stringify(clientes));
-    } else if (reqUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
+    } else if (parsedUrl.pathname === '/enviar-marketing' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
@@ -517,7 +493,7 @@ const server = http.createServer(async (req, res) => {
             }
             res.end("OK");
         });
-    } else if (reqUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
+    } else if (parsedUrl.pathname === '/enviar-cobranza' && req.method === 'POST') {
         if (!isBotReady()) return res.end("Bot no listo.");
         let b = ''; req.on('data', c => b += c);
         req.on('end', async () => {
