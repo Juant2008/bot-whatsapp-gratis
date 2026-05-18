@@ -14,7 +14,7 @@ async function obtenerFacturasNoNotificadas() {
                 v.celular_vendedor, v.nombre as vendedor_nombre
          FROM tab_facturas f
          LEFT JOIN tab_vendedores v ON f.id_vendedor = v.id_vendedor
-         WHERE f.whatsapp_notificado = 'NO' AND f.anulado = 'no'
+         WHERE f.whatsapp_notificado = 'NO' AND f.anulado = 'no' and pagada = 'NO'
          ORDER BY f.id_factura ASC`
     );
     await conn.end();
