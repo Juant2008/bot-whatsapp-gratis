@@ -228,30 +228,16 @@ async function buscarProductoPorTexto(texto) {
     // ---------------------------------------------------------
 
     const queryBase = "SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE ";
-    const vistos = new Set();
-
-    // 1. Intentar con TODAS las palabras juntas (AND)
+    
+    // 1. Intentar con TODAS las palabras juntas (AND) - BÚSQUEDA ESTRICTA
+    // Solo devolvemos resultados si el producto contiene TODAS las palabras clave filtradas.
     const allAnd = palabras.map(() => "descripcion LIKE ?").join(" AND ");
     try {
         const [rows] = await pool.execute(queryBase + allAnd + " LIMIT 8", palabras.map(p => `%${p}%`));
         if (rows.length > 0) return rows;
     } catch (e) {}
 
-    // 2. Buscar CADA palabra individualmente y combinar resultados
-    const todos = [];
-    for (const p of palabras) {
-        try {
-            const [rows] = await pool.execute(queryBase + "descripcion LIKE ? LIMIT 5", [`%${p}%`]);
-            for (const r of rows) {
-                if (!vistos.has(r.producto)) {
-                    vistos.add(r.producto);
-                    todos.push(r);
-                }
-            }
-        } catch (e) {}
-    }
-    if (todos.length > 0) return todos.slice(0, 8);
-
+    // SE ELIMINÓ EL BUCLE DE BÚSQUEDA INDIVIDUAL (OR) PARA EVITAR RESPUESTAS ABSURDAS
     return null;
 }
 
