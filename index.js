@@ -211,33 +211,65 @@ async function buscarProductoPorTexto(texto) {
         'vamos', 'vaya', 'algun', 'alguna', 'algunos', 'algunas', 'ningun', 'ninguna',
         'tipo', 'tipos', 'preguntar', 'disculpa', 'disculpe', 'permiso', 'ayudar',
         'apoyo', 'consulta', 'consultar', 'info', 'informacion', 'decirme', 'dime',
-        'avísame', 'avisa', 'saber', 'sabes', 'saben', 'sabemos'
+        'avísame', 'avisa', 'saber', 'sabes', 'saben', 'sabemos',
+        'pana', 'panas', 'brother', 'bro', 'amigo', 'amigos', 'compa', 'compadre',
+        'ando', 'andas', 'andan', 'andaba', 'andabas', 'andabamos', 'andaban',
+        'estoy', 'estas', 'esta', 'estaba', 'estabas', 'estabamos', 'estaban',
+        'vengo', 'vienes', 'viene', 'vienen', 'venia', 'venias', 'veniamos', 'venian',
+        'voy', 'vas', 'va', 'vamos', 'van', 'iba', 'ibas', 'ibamos', 'iban'
     ];
 
-    const palabras = txtNormal.split(' ')
+    const palabrasBase = txtNormal.split(' ')
         .filter(p => p.length > 2 && !stopWords.includes(p));
 
-    if (palabras.length === 0) return null;
+    if (palabrasBase.length === 0) return null;
 
     // --- FILTRO DE PALABRAS DE POSICIÓN (SOLO COINCIDENCIAS) ---
     const positionalWords = ['superior', 'sup', 'inferior', 'inf', 'interno', 'int', 'externo', 'ext', 'derecha', 'der', 'izquierda', 'izq'];
-    const isOnlyPositional = palabras.every(p => positionalWords.includes(p));
-    if (isOnlyPositional) return null; 
-    // ---------------------------------------------------------
+    const isOnlyPositional = palabrasBase.every(p => positionalWords.includes(p));
+    if (isOnlyPositional) return null;
 
-    const queryBase = "SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE ";
-    
-    // 1. Intentar con TODAS las palabras juntas (AND) - BÚSQUEDA ESTRICTA
-    const allAnd = palabras.map(() => "descripcion LIKE ?").join(" AND ");
+    // --- Expansión singular/plural ---
+    const expandirFormas = (pal) => {
+        const f = [pal];
+        if (pal.endsWith('es') && pal.length > 4) f.push(pal.slice(0, -2));
+        if (pal.endsWith('s') && pal.length > 3 && !pal.endsWith('es')) f.push(pal.slice(0, -1));
+        if (!pal.endsWith('s')) {
+            f.push(pal + 's');
+            if (pal.endsWith('z')) f.push(pal.slice(0, -1) + 'ces');
+        }
+        return [...new Set(f)];
+    };
+
+    const stockCondition = "(cantidad_existencia + cantidad_existencia_almacen > 0)";
+    const queryBase = `SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE ${stockCondition} AND `;
+
+    // 1. AND con las palabras base exactas
+    const allAnd = palabrasBase.map(() => "descripcion LIKE ?").join(" AND ");
     try {
-        const [rows] = await pool.execute(queryBase + allAnd + " LIMIT 8", palabras.map(p => `%${p}%`));
+        const [rows] = await pool.execute(queryBase + allAnd + " LIMIT 8", palabrasBase.map(p => `%${p}%`));
         if (rows.length > 0) return rows;
     } catch (e) {}
 
-    // 2. Fallback: si AND no encuentra nada, buscar con CUALQUIER palabra (OR)
-    const allOr = palabras.map(() => "descripcion LIKE ?").join(" OR ");
+    // 2. OR con todas las formas (singular/plural) ordenado por relevancia
+    const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
+    const orConditions = expandedTerms.map(() => "descripcion LIKE ?");
+    const orParams = expandedTerms.map(p => `%${p}%`);
+
+    // Relevancia = cuantas palabras BASE distintas tienen al menos una forma coincidiendo
+    const relevanceParts = palabrasBase.map(p => {
+        const formas = expandirFormas(p);
+        const cases = formas.map(f => `descripcion LIKE '%${f.replace(/[^a-z]/g, '')}%'`);
+        return `(CASE WHEN ${cases.join(' OR ')} THEN 1 ELSE 0 END)`;
+    });
+    const relevanceSQL = relevanceParts.join(' + ');
+    const minRelevance = palabrasBase.length >= 2 ? 2 : 1;
+
     try {
-        const [rows] = await pool.execute(queryBase + allOr + " LIMIT 8", palabras.map(p => `%${p}%`));
+        const [rows] = await pool.execute(
+            queryBase + orConditions.join(" OR ") + ` HAVING (${relevanceSQL}) >= ? ORDER BY ${relevanceSQL} DESC LIMIT 8`,
+            [...orParams, minRelevance]
+        );
         if (rows.length > 0) return rows;
     } catch (e) {}
 
