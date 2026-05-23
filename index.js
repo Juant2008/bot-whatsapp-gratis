@@ -1,3 +1,5 @@
+--- START OF FILE index (4).js ---
+
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
@@ -56,22 +58,22 @@ const MENU_TEXT = `📋 *MENÚ PRINCIPAL ONE4CARS*
 
 _Escriba el número de la opción o su consulta directamente._`;
 
-// MAPEO DE INTENCIONES PARA EL MENÚ (Para que el bot sea inteligente)
+// MAPEO DE INTENCIONES AMPLIADO (Más flexible)
 const MENU_INTENTIONS = {
     '2': {
-        keywords: ['estado de cuenta', 'cuentas por cobrar', 'que me deben', 'mandame que me deben', 'mi saldo', 'saldo pendiente'],
+        keywords: ['estado de cuenta', 'cuentas por cobrar', 'que me deben', 'mandame que me deben', 'mi saldo', 'saldo pendiente', 'cuanto debo', 'mi deuda'],
         response: `2️⃣ *Estado de cuenta:* https://www.one4cars.com/estado_de_cuenta.php/`
     },
     '3': {
-        keywords: ['lista de precios', 'envieme la lista de precios', 'como puedo obtener la lista de precios', 'catálogo de precios', 'precios actualizados'],
+        keywords: ['lista de precios', 'envieme la lista de precios', 'como puedo obtener la lista de precios', 'recibir la lista de precios', 'catálogo de precios', 'precios actualizados', 'quiero los precios'],
         response: `3️⃣ *Lista de precios:* https://www.one4cars.com/lista_de_precios.php/`
     },
     '4': {
-        keywords: ['tomar pedido', 'hacer pedido', 'quiero hacer un pedido', 'registar pedido'],
+        keywords: ['tomar pedido', 'enviar pedido', 'hacer pedido', 'registar pedido', 'tomar un pedido', 'enviar un pedido', 'quiero hacer un pedido'],
         response: `4️⃣ *Tomar pedido:* https://www.one4cars.com/tomar_pedido.php/`
     },
     '7': {
-        keywords: ['que productos venden', 'que repuestos venden', 'consulta de productos', 'qué tienen disponible', 'buscar repuestos'],
+        keywords: ['que productos venden', 'que repuestos venden', 'consulta de productos', 'qué tienen disponible', 'buscar repuestos', 'que venden', 'venden repuestos'],
         response: `7️⃣ *Consulta de productos:* https://www.one4cars.com/consulta_productos.php/`
     }
 };
@@ -242,10 +244,14 @@ async function buscarProductoPorTexto(texto) {
     const palabrasBase = txtNormal.split(' ')
         .filter(p => p.length > 2 && !stopWords.includes(p));
 
-    if (palabrasBase.length === 0) return null;
+    // SI EL TEXTO ES SOLO UN NUMERO (POSIBLE SKU), NO FILTRAMOS POR stopWords ni longitud
+    const esSoloNumero = /^\d+$/.test(txtNormal);
+    const palabrasFinales = esSoloNumero ? [txtNormal] : palabrasBase;
+
+    if (palabrasFinales.length === 0) return null;
 
     const positionalWords = ['superior', 'sup', 'inferior', 'inf', 'interno', 'int', 'externo', 'ext', 'derecha', 'der', 'izquierda', 'izq'];
-    const isOnlyPositional = palabrasBase.every(p => positionalWords.includes(p));
+    const isOnlyPositional = palabrasFinales.every(p => positionalWords.includes(p));
     if (isOnlyPositional) return null;
 
     const expandirFormas = (pal) => {
@@ -265,12 +271,11 @@ async function buscarProductoPorTexto(texto) {
     let whereClause = "";
     let queryParams = [];
 
-    palabrasBase.forEach((pal, index) => {
+    palabrasFinales.forEach((pal, index) => {
         const formas = expandirFormas(pal);
-        // Buscamos en descripcion OR producto (SKU) OR equivalencia
         const conditions = formas.map(() => "(descripcion LIKE ? OR producto LIKE ? OR equivalencia LIKE ?)");
         whereClause += `(${conditions.join(" OR ")})`;
-        if (index < palabrasBase.length - 1) whereClause += " AND ";
+        if (index < palabrasFinales.length - 1) whereClause += " AND ";
         
         formas.forEach(f => {
             queryParams.push(`%${f}%`, `%${f}%`, `%${f}%`);
@@ -287,14 +292,14 @@ async function buscarProductoPorTexto(texto) {
 
     // --- INTENTO 2: BÚSQUEDA POR RELEVANCIA DINÁMICA ---
     let minRelevance = 1;
-    if (palabrasBase.length >= 3) minRelevance = 2;
-    if (palabrasBase.length >= 5) minRelevance = 3;
+    if (palabrasFinales.length >= 3) minRelevance = 2;
+    if (palabrasFinales.length >= 5) minRelevance = 3;
 
-    const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
+    const expandedTerms = [...new Set(palabrasFinales.flatMap(expandirFormas))];
     const orConditions = expandedTerms.map(() => "(descripcion LIKE ? OR producto LIKE ? OR equivalencia LIKE ?)");
     const orParams = expandedTerms.flatMap(p => [`%${p}%`, `%${p}%`, `%${p}%`]);
 
-    const relevanceParts = palabrasBase.map(p => {
+    const relevanceParts = palabrasFinales.map(p => {
         const formas = expandirFormas(p);
         const cases = formas.map(f => {
             const fClean = f.replace(/[^a-z]/g, '');
@@ -581,7 +586,7 @@ async function startBot() {
         const sesion = await getSesion(from);
         if (sesion && sesion.modo === 'humano' && !isAdmin) return;
 
-        // --- 1. LÓGICA de RIF (RESTRINGIDA SOLO A ADMINS) ---
+        // --- 1. LÓGICA de RIF (ADMINS) ---
         if (isAdmin && esRIFPuro) {
             const rifLimpio = limpiarRIF(rawText);
             const c = await buscarCliente(rifLimpio);
@@ -603,9 +608,9 @@ async function startBot() {
                     list += `💰 *TOTAL A PAGAR: $${totalP.toFixed(2)}*`;
                 }
                 return await safeSendMessage(from, { text: list });
-            } else {
-                return await safeSendMessage(from, { text: "❌ No se encontró ningún cliente con ese RIF." });
-            }
+            } 
+            // IMPORTANTE: Si no es un cliente, NO hacemos return. 
+            // Dejamos que el flujo continúe para ver si el número es un PRODUCTO (SKU).
         }
 
         // --- 2. LÓGICA DE PAGO MÓVIL ---
@@ -613,8 +618,7 @@ async function startBot() {
             return await safeSendMessage(from, { text: "Saludos este es Nuestro Pago Movil\n04142423348\nV12959286\nBanesco" });
         }
 
-        // --- 3. RECONOCIMIENTO de INTENCIONES DEL MENÚ (NUEVA LÓGICA) ---
-        // Verificamos si el mensaje coincide con alguna frase clave del menú antes de buscar productos
+        // --- 3. RECONOCIMIENTO de INTENCIONES DEL MENÚ (FLEXIBLE) ---
         for (const key in MENU_INTENTIONS) {
             const intention = MENU_INTENTIONS[key];
             if (intention.keywords.some(kw => text.includes(kw))) {
@@ -622,7 +626,7 @@ async function startBot() {
             }
         }
 
-        // --- 4. LÓGICA DE PRODUCTOS (Busca en Descripción, SKU y Equivalencia) ---
+        // --- 4. LÓGICA DE PRODUCTOS (SKU, Descripcion, Equivalencia) ---
         if (text !== 'menu' && !['hola', 'buen dia', 'buenos dias'].includes(text)) {
             try {
                 const prods = await buscarProductoPorTexto(rawText);
