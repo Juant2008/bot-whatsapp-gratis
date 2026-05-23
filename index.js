@@ -1,3 +1,5 @@
+--- START OF FILE index (4).js ---
+
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
@@ -55,6 +57,26 @@ const MENU_TEXT = `📋 *MENÚ PRINCIPAL ONE4CARS*
 9️⃣ *Asesor Humano:* Indique su duda y un operador revisará el caso pronto.
 
 _Escriba el número de la opción o su consulta directamente._`;
+
+// MAPEO DE INTENCIONES PARA EL MENÚ (Para que el bot sea inteligente)
+const MENU_INTENTIONS = {
+    '2': {
+        keywords: ['estado de cuenta', 'cuentas por cobrar', 'que me deben', 'mandame que me deben', 'mi saldo', 'saldo pendiente'],
+        response: `2️⃣ *Estado de cuenta:* https://www.one4cars.com/estado_de_cuenta.php/`
+    },
+    '3': {
+        keywords: ['lista de precios', 'envieme la lista de precios', 'como puedo obtener la lista de precios', 'catálogo de precios', 'precios actualizados'],
+        response: `3️⃣ *Lista de precios:* https://www.one4cars.com/lista_de_precios.php/`
+    },
+    '4': {
+        keywords: ['tomar pedido', 'hacer pedido', 'quiero hacer un pedido', 'registar pedido'],
+        response: `4️⃣ *Tomar pedido:* https://www.one4cars.com/tomar_pedido.php/`
+    },
+    '7': {
+        keywords: ['que productos venden', 'que repuestos venden', 'consulta de productos', 'qué tienen disponible', 'buscar repuestos'],
+        response: `7️⃣ *Consulta de productos:* https://www.one4cars.com/consulta_productos.php/`
+    }
+};
 
 let qrCodeData = "Iniciando...";
 let socketBot = null;
@@ -241,114 +263,20 @@ async function buscarProductoPorTexto(texto) {
 
     const stockCondition = "(cantidad_existencia + cantidad_existencia_almacen > 0)";
     
-    // --- NUEVA LÓGICA DE BÚSQUEDA AND FLEXIBLE ---
-    // Para cada palabra, creamos un grupo de (desc LIKE %p1% OR desc LIKE %p2%...)
-    // Y luego unimos todos esos grupos con AND.
+    // --- INTENTO 1: BÚSQUEDA ESTRICTA (Todo debe coincidir en alguno de los 3 campos) ---
     let whereClause = "";
     let queryParams = [];
 
     palabrasBase.forEach((pal, index) => {
         const formas = expandirFormas(pal);
-        const conditions = formas.map(() => "descripcion LIKE ?");
+        // Buscamos en descripcion OR producto (SKU) OR equivalencia
+        const conditions = formas.map(() => "(descripcion LIKE ? OR producto LIKE ? OR equivalencia LIKE ?)");
         whereClause += `(${conditions.join(" OR ")})`;
         if (index < palabrasBase.length - 1) whereClause += " AND ";
         
-        formas.forEach(f => queryParams.push(`%${f}%`));
-    });
-
-    try {
-        const sql = `SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE ${stockCondition} AND ${whereClause} LIMIT 8`;
-        const [rows] = await pool.execute(sql, queryParams);
-        if (rows.length > 0) return rows;
-    } catch (e) {
-        console.log("Error en búsqueda AND Flexible:", e.message);
-    }
-
-    // --- FALLBACK: Búsqueda por Relevancia (Solo si el AND Flexible no encontró nada) ---
-    const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
-    const orConditions = expandedTerms.map(() => "descripcion LIKE ?");
-    const orParams = expandedTerms.map(p => `%${p}%`);
-
-    const relevanceParts = palabrasBase.map(p => {
-        const formas = expandirFormas(p);
-        const cases = formas.map(f => `descripcion LIKE '%${f.replace(/[^a-z]/g, '')}%'`);
-        return `(CASE WHEN ${cases.join(' OR ')} THEN 1 ELSE 0 END)`;
-    });
-    const relevanceSQL = relevanceParts.join(' + ');
-    const minRelevance = palabrasBase.length >= 2 ? 2 : 1;
-
-    try {
-        const [rows] = await pool.execute(
-            `SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE ${stockCondition} AND ${orConditions.join(" OR ")} HAVING (${relevanceSQL}) >= ? ORDER BY ${relevanceSQL} DESC LIMIT 8`,
-            [...orParams, minRelevance]
-        );
-        if (rows.length > 0) return rows;
-    } catch (e) {}
-
-    return null;
-}async function buscarProductoPorTexto(texto) {
-    const txtNormal = normalizar(texto);
-    const stopWords = [
-        'tienes', 'la', 'del', 'quiere', 'saber', 'cuanto', 'mide', 'venden', 'donde',
-        'precio', 'tienen', 'el', 'una', 'un', 'hay', 'si', 'es', 'de', 'con', 'para',
-        'busco', 'hola', 'buenos', 'buenas', 'dias', 'tardes', 'noches', 'como', 'estas',
-        'esta', 'familia', 'espero', 'encuentres', 'encuenters', 'bien', 'queria',
-        'preguntarte', 'gracias', 'por', 'favor', 'ayuda', 'puedes', 'podrias',
-        'quisiera', 'necesito', 'saludos', 'cordial', 'muchas', 'todo', 'bienvenidos',
-        'bendiciones', 'exito', 'exitos', 'dia', 'tarde', 'noche', 'pregunta', 'consulta',
-        'atento', 'atenta', 'saludo', 'estimados', 'estimado', 'buen', 'buena', 'bueno',
-        'se', 'me', 'le', 'te', 'lo', 'los', 'las', 'les', 'su', 'sus', 'mi', 'mis',
-        'tu', 'tus', 'nos', 'os', 'que', 'cual', 'cuales', 'quien', 'quienes',
-        'cuando', 'porque', 'pues', 'pero', 'mas', 'muy', 'asi', 'aun', 'entre', 'sin',
-        'sobre', 'tras', 'durante', 'mediante', 'excepto', 'segun', 'puede', 'puedo',
-        'pueden', 'podemos', 'podria', 'hacer', 'hace', 'hacen', 'ser', 'estar', 'tener',
-        'tengo', 'tenemos', 'tiene', 'decir', 'dice', 'dicen', 'digo', 'ver', 'veo',
-        'ven', 'vez', 'veces', 'quiero', 'quiere', 'quieren', 'queremos', 'gustaria',
-        'gusta', 'gustan', 'gusto', 'necesita', 'necesitan', 'necesitamos', 'pueda','UNID.','unid.','unidades','unidad','UNIDADES','unidades',
-        'puedas', 'pudiera', 'pudieras', 'listo', 'claro', 'ok', 'okey', 'vale', 'va',
-        'vamos', 'vaya', 'algun', 'alguna', 'algunos', 'algunas', 'ningun', 'ninguna',
-        'tipo', 'tipos', 'preguntar', 'disculpa', 'disculpe', 'permiso', 'ayudar',
-        'apoyo', 'consulta', 'consultar', 'info', 'informacion', 'decirme', 'dime',
-        'avísame', 'avisa', 'saber', 'sabes', 'saben', 'sabemos',
-        'pana', 'panas', 'brother', 'bro', 'amigo', 'amigos', 'compa', 'compadre',
-        'ando', 'andas', 'andan', 'andaba', 'andabas', 'andabamos', 'andaban',
-        'estoy', 'estas', 'esta', 'estaba', 'estabas', 'estabamos', 'estaban',
-        'vengo', 'vienes', 'viene', 'vienen', 'venia', 'venias', 'veniamos', 'venian',
-        'voy', 'vas', 'va', 'vamos', 'van', 'iba', 'ibas', 'ibamos', 'iban'
-    ];
-
-    const palabrasBase = txtNormal.split(' ')
-        .filter(p => p.length > 2 && !stopWords.includes(p));
-
-    if (palabrasBase.length === 0) return null;
-
-    const positionalWords = ['superior', 'sup', 'inferior', 'inf', 'interno', 'int', 'externo', 'ext', 'derecha', 'der', 'izquierda', 'izq'];
-    const isOnlyPositional = palabrasBase.every(p => positionalWords.includes(p));
-    if (isOnlyPositional) return null;
-
-    const expandirFormas = (pal) => {
-        const f = [pal];
-        if (pal.endsWith('es') && pal.length > 4) f.push(pal.slice(0, -2));
-        if (pal.endsWith('s') && pal.length > 3 && !pal.endsWith('es')) f.push(pal.slice(0, -1));
-        if (!pal.endsWith('s')) {
-            f.push(pal + 's');
-            if (pal.endsWith('z')) f.push(pal.slice(0, -1) + 'ces');
-        }
-        return [...new Set(f)];
-    };
-
-    const stockCondition = "(cantidad_existencia + cantidad_existencia_almacen > 0)";
-    
-    // --- INTENTO 1: BÚSQUEDA ESTRICTA (Todo debe coincidir) ---
-    let whereClause = "";
-    let queryParams = [];
-
-    palabrasBase.forEach((pal, index) => {
-        const formas = expandirFormas(pal);
-        const conditions = formas.map(() => "descripcion LIKE ?");
-        whereClause += `(${conditions.join(" OR ")})`;
-        if (index < palabrasBase.length - 1) whereClause += " AND ";
-        formas.forEach(f => queryParams.push(`%${f}%`));
+        formas.forEach(f => {
+            queryParams.push(`%${f}%`, `%${f}%`, `%${f}%`);
+        });
     });
 
     try {
@@ -360,18 +288,20 @@ async function buscarProductoPorTexto(texto) {
     }
 
     // --- INTENTO 2: BÚSQUEDA POR RELEVANCIA DINÁMICA ---
-    // Calculamos cuántas palabras MÍNIMO deben coincidir para no enviar basura.
     let minRelevance = 1;
-    if (palabrasBase.length >= 3) minRelevance = 2; // Si pide 3 palabras, debe coincidir al menos 2.
-    if (palabrasBase.length >= 5) minRelevance = 3; // Si pide 5 palabras, debe coincidir al menos 3.
+    if (palabrasBase.length >= 3) minRelevance = 2;
+    if (palabrasBase.length >= 5) minRelevance = 3;
 
     const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
-    const orConditions = expandedTerms.map(() => "descripcion LIKE ?");
-    const orParams = expandedTerms.map(p => `%${p}%`);
+    const orConditions = expandedTerms.map(() => "(descripcion LIKE ? OR producto LIKE ? OR equivalencia LIKE ?)");
+    const orParams = expandedTerms.flatMap(p => [`%${p}%`, `%${p}%`, `%${p}%`]);
 
     const relevanceParts = palabrasBase.map(p => {
         const formas = expandirFormas(p);
-        const cases = formas.map(f => `descripcion LIKE '%${f.replace(/[^a-z]/g, '')}%'`);
+        const cases = formas.map(f => {
+            const fClean = f.replace(/[^a-z]/g, '');
+            return `(descripcion LIKE '%${fClean}%' OR producto LIKE '%${fClean}%' OR equivalencia LIKE '%${fClean}%')`;
+        });
         return `(CASE WHEN ${cases.join(' OR ')} THEN 1 ELSE 0 END)`;
     });
     const relevanceSQL = relevanceParts.join(' + ');
@@ -393,6 +323,7 @@ async function buscarProductoPorTexto(texto) {
 
     return null;
 }
+
 async function obtenerDetalleFacturas(id_cliente, id_vendedor = null) {
     let query = `
         SELECT f.id_factura, f.nro_factura, f.total, f.abono_factura, f.fecha_reg, f.porcentaje, f.descuento, f.total_desc,
@@ -430,7 +361,6 @@ async function checkNuevasFacturas() {
             const msg = `🧾 *NUEVA FACTURA REGISTRADA*\n\nHola *${f.nombres}*, se ha registrado una nueva factura en nuestro sistema:\n\n🔹 *N°:* ${f.nro_factura}\n🔹 *Monto:* $${parseFloat(f.total).toFixed(2)}\n🔹 *Fecha:* ${fecha}\n\nPuede consultar su estado de cuenta en:\nhttps://www.one4cars.com/estado_de_cuenta.php/`;
             await safeSendMessage(jid, { text: msg });
 
-            // Notificar tambien al vendedor
             if (f.celular_vendedor) {
                 const jidV = formatWhatsApp(f.celular_vendedor);
                 if (jidV) {
@@ -488,7 +418,6 @@ async function checkFacturasVencidas() {
 
             const fecha = new Date(f.fecha_reg).toISOString().split('T')[0];
 
-            // Solo al cliente, una vez por nivel (30, 40, 50, 60)
             const yaEnviado = enviados[f.id_factura] && enviados[f.id_factura].includes(nivel);
             if (!yaEnviado) {
                 const jid = formatWhatsApp(f.celular);
@@ -512,28 +441,20 @@ async function checkFacturasVencidas() {
     }
 }
 
-// ===== RECORDATORIO A VENDEDORES (cada 3 días, solo días hábiles) =====
+// ===== RECORDATORIO A VENDEDORES =====
 let vendedorEjecutando = false;
 
 async function checkVendedoresRecordatorio() {
     if (!isBotReady() || vendedorEjecutando) return;
     vendedorEjecutando = true;
     try {
-        // 1. Solo días de semana (lunes=1 ... viernes=5)
         const hoy = new Date().getDay();
-        if (hoy === 0 || hoy === 6) {
-            console.log("[VENDEDORES] Es fin de semana, se omite el envío.");
-            return;
-        }
+        if (hoy === 0 || hoy === 6) return;
 
-        // 2. Verificar que hayan pasado al menos 3 días desde el último envío
         const ultimo = await notificador.obtenerUltimoEnvioVendedor();
         if (ultimo) {
             const diff = Math.floor((new Date() - new Date(ultimo)) / 86400000);
-            if (diff < 3) {
-                console.log(`[VENDEDORES] Último envío fue hace ${diff} día(s), se omite (mínimo 3).`);
-                return;
-            }
+            if (diff < 3) return;
         }
 
         const facturas = await notificador.obtenerFacturasVencidasAll();
@@ -546,7 +467,6 @@ async function checkVendedoresRecordatorio() {
             let monto = (parseFloat(f.total) - parseFloat(f.abono_factura || 0)) / (parseFloat(f.porcentaje) || 1);
             if (monto <= 0 || !f.celular_vendedor) continue;
 
-            // MODIFICACIÓN SOLICITADA: Si el vendedor es MANUEL FERRAZ, dividir monto entre 0.80
             if (f.vendedor_nombre && f.vendedor_nombre.toUpperCase() === 'MANUEL FERRAZ') {
                 monto = monto / 0.80;
             }
@@ -581,7 +501,6 @@ async function checkVendedoresRecordatorio() {
 
 // ===== BOT WHATSAPP =====
 async function startBot() {
-    // Limpiar socket anterior antes de crear uno nuevo
     if (socketBot) {
         try {
             socketBot.removeAllListeners();
@@ -616,7 +535,6 @@ async function startBot() {
                 setInterval(checkVendedoresRecordatorio, 86400000);
                 setInterval(() => {
                     if (!isBotReady() && socketBot) {
-                        console.log("[BOT] Health check: reconectando...");
                         startBot();
                     }
                 }, 300000);
@@ -625,7 +543,6 @@ async function startBot() {
         if (connection === 'close') {
             const r = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (r) {
-                console.log("[BOT] Reconectando en 5 segundos...");
                 setTimeout(() => startBot(), 5000);
             }
         }
@@ -640,7 +557,6 @@ async function startBot() {
         const from = msg.key.remoteJid;
         if (from === 'status@broadcast' || from.includes('@g.us')) return;
 
-        // VERIFICACIÓN DE ADMINISTRADOR (Cualquiera de los IDs en la lista)
         const isAdmin = ADMIN_IDS.some(id => from.includes(id));
         const vendedor = await buscarVendedor(from, msg.pushName || "Vendedor");
 
@@ -650,7 +566,6 @@ async function startBot() {
                 await setModo(from, 'bot');
                 await safeSendMessage(from, { text: "🤖 Bot reactivado para este chat." });
             } else {
-                // CORRECCIÓN: Cualquier mensaje enviado por el dueño pone el chat en modo humano inmediatamente
                 await setModo(from, 'humano');
             }
             return;
@@ -700,27 +615,31 @@ async function startBot() {
             return await safeSendMessage(from, { text: "Saludos este es Nuestro Pago Movil\n04142423348\nV12959286\nBanesco" });
         }
 
-        // --- 3. LÓGICA DE PRODUCTOS (Para todos) ---
+        // --- 3. RECONOCIMIENTO de INTENCIONES DEL MENÚ (NUEVA LÓGICA) ---
+        // Verificamos si el mensaje coincide con alguna frase clave del menú antes de buscar productos
+        for (const key in MENU_INTENTIONS) {
+            const intention = MENU_INTENTIONS[key];
+            if (intention.keywords.some(kw => text.includes(kw))) {
+                return await safeSendMessage(from, { text: intention.response });
+            }
+        }
+
+        // --- 4. LÓGICA DE PRODUCTOS (Busca en Descripción, SKU y Equivalencia) ---
         if (text !== 'menu' && !['hola', 'buen dia', 'buenos dias'].includes(text)) {
             try {
                 const prods = await buscarProductoPorTexto(rawText);
                 if (prods) {
-                    // LISTA DE SALUDOS HUMANIZADOS
-const saludos = [
-    "Saludos estimado , gracias por tu consulta puedo recomendarte estos artículos: 👇",
-    "¡Hola! He buscado en nuestro inventario y creo que estos artículos es lo que buscas: 👇",
-    "Con gusto le ayudo. Segun lo que me dices, aquí tienes la mejor opcion disponible: 👇",
-    "Hola, un placer saludarle. He encontrado estos productos que coinciden con su búsqueda: 👇"
-];
+                    const saludos = [
+                        "Saludos estimado , gracias por tu consulta puedo recomendarte estos artículos: 👇",
+                        "¡Hola! He buscado en nuestro inventario y creo que estos artículos es lo que buscas: 👇",
+                        "Con gusto le ayudo. Segun lo que me dices, aquí tienes la mejor opcion disponible: 👇",
+                        "Hola, un placer saludarle. He encontrado estos productos que coinciden con su búsqueda: 👇"
+                    ];
                     const saludoAzar = saludos[Math.floor(Math.random() * saludos.length)];
 
-                    // 1. Enviamos primero el mensaje humano (TEXTO)
                     await safeSendMessage(from, { text: saludoAzar });
-                    
-                    // Pausa para naturalidad
                     await sleep(1500);
 
-                    // 2. Ahora enviamos la lista de productos (IMAGENES)
                     for (const p of prods) {
                         if (!isBotReady()) break; 
                         const precioLimpio = parseFloat(p.precio_final || 0).toFixed(2);
@@ -733,12 +652,12 @@ const saludos = [
                         }
                         await sleep(1500);
                     }
-                    return; // Salir para no entrar en el fallback
+                    return;
                 }
             } catch (e) { console.log("Error en flujo de productos:", e); }
         }
 
-        // --- 4. COMANDOS DE ADMINISTRADOR ---
+        // --- 5. COMANDOS DE ADMINISTRADOR ---
         if (isAdmin) {
             if (text === 'dolar') {
                 await actualizarDolar();
@@ -749,7 +668,7 @@ const saludos = [
             }
         }
 
-        // --- 5. SALUDO CORDIAL Y MENU (Vendedor / Cliente) ---
+        // --- 6. SALUDO CORDIAL Y MENU ---
         if (text === 'menu' || text === 'hola' || text === 'buen dia' || text === 'buenos dias') {
             const nombreUsuario = vendedor ? vendedor.nombre : pushName;
             const saludoCordial = `¡Hola *${nombreUsuario}*! Es un gusto saludarte. 😊\n\n¿En qué podemos ayudarte hoy? Por favor, indícanos qué servicio necesitas o consulta nuestro menú a continuación:\n\n${MENU_TEXT}`;
@@ -773,7 +692,7 @@ const saludos = [
             return await safeSendMessage(from, { text: listado });
         }
 
-        // --- 6. FALLBACK (SÓLO SI NO ES UNA RESPUESTA CORTA O CONVERSACIÓN LARGA) ---
+        // --- 7. FALLBACK ---
         const conversationalShorts = ['si', 'no', 'ok', 'vale', 'gracias', 'ya', 'entendido', 'está bien', 'bueno', 'dale', 'está ok', 'está bien', 'claro'];
         if (conversationalShorts.includes(text)) return; 
 
