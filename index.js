@@ -563,12 +563,15 @@ async function startBot() {
             }
 
             // --- 2. LÓGICA DE DESPACHO Y PEDIDOS (NUEVO) ---
-            if (text.includes("cuando llega mi pedido") || 
-                text.includes("tiempo tardan en despachar") || 
-                text.includes("pedido hoy cuando me llega") ||
-                (text.includes("pedido") && text.includes("llega"))) {
-                return await safeSendMessage(from, { text: "Saludos estimado cliente, su pedido esta disponible en un lapso no mayor de 24 horas" });
-            }
+const tiempoWords = ["cuanto", "cuando", "tiempo", "tarda", "tardan", "demora", "está"];
+const despachoWords = ["despachar", "despacho", "llega", "entrega", "envio", "pedido"];
+
+const hasTiempo = tiempoWords.some(w => text.includes(w));
+const hasDespacho = despachoWords.some(w => text.includes(w));
+
+if (hasTiempo && hasDespacho) {
+    return await safeSendMessage(from, { text: "Saludos estimado cliente, su pedido esta disponible en un lapso no mayor de 24 horas" });
+}
 
             // --- 3. LÓGICA DE PAGO MÓVIL ---
             if (text.includes("pago movil") || text.includes("forma de pago") || text.includes("datos")) {
