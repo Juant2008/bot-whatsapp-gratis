@@ -67,7 +67,7 @@ const MENU_INTENTIONS = {
         response: `2️⃣ *Estado de cuenta:* https://www.one4cars.com/estado_de_cuenta.php/`
     },
     '3': {
-        keywords: ['lista de precios', 'listado de precios', 'catalogo de precios', 'cuanto cuestan', 'ver precios'],
+        keywords: ['lista de precios', 'listado de precios', 'catalogo de precios', 'cuanto cuestan' , 'pasame la lista', 'ver precios'],
         response: `3️⃣ *Lista de precios:* https://www.one4cars.com/lista_de_precios.php/`
     },
     '4': {
