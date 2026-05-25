@@ -1,3 +1,5 @@
+--- START OF FILE index_nuevo.js ---
+
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode');
@@ -55,6 +57,46 @@ const MENU_TEXT = `📋 *MENÚ PRINCIPAL ONE4CARS*
 9️⃣ *Asesor Humano:* Indique su duda y un operador revisará el caso pronto.
 
 _Escriba el número de la opción o su consulta directamente._`;
+
+// ===== MAPA DE INTENCIONES DEL MENÚ (DETECCIÓN AMPLIA) =====
+const MENU_INTENTIONS = {
+    '1': {
+        keywords: ['pago', 'pagar', 'transferir', 'bancos', 'cuentas', 'movil', 'metodos', 'formas', 'datos de pago', 'pago movil'],
+        response: `1️⃣ *Medios de pago:* https://www.one4cars.com/medios_de_pago.php/`
+    },
+    '2': {
+        keywords: ['saldo', 'cuenta', 'deuda', 'cuanto debo', 'estado', 'pendiente', 'facturas', 'estado de cuenta'],
+        response: `2️⃣ *Estado de cuenta:* https://www.one4cars.com/estado_de_cuenta.php/`
+    },
+    '3': {
+        keywords: ['precios', 'catalogo', 'lista', 'cuanto cuesta', 'tarifas', 'precio de'],
+        response: `3️⃣ *Lista de precios:* https://www.one4cars.com/lista_de_precios.php/`
+    },
+    '4': {
+        keywords: ['pedido', 'comprar', 'orden', 'hacer pedido', 'encargar', 'tomar pedido'],
+        response: `4️⃣ *Tomar pedido:* https://www.one4cars.com/tomar_pedido.php/`
+    },
+    '5': {
+        keywords: ['mis clientes', 'vendedores', 'mi equipo', 'lista de clientes', 'ver clientes'],
+        response: `5️⃣ *Mis clientes/Vendedores:* https://www.one4cars.com/mis_clientes.php/`
+    },
+    '6': {
+        keywords: ['afiliar', 'registrar', 'nuevo cliente', 'dar de alta', 'inscribir cliente'],
+        response: `6️⃣ *Afiliar cliente:* https://www.one4cars.com/afiliar_clientes.php/`
+    },
+    '7': {
+        keywords: ['buscar producto', 'inventario', 'stock', 'disponibilidad', 'que tienen', 'consulta de productos'],
+        response: `7️⃣ *Consulta de productos:* https://www.one4cars.com/consulta_productos.php/`
+    },
+    '8': {
+        keywords: ['despacho', 'envio', 'guia', 'rastrear', 'entrega', 'seguimiento', 'donde esta mi pedido'],
+        response: `8️⃣ *Seguimiento Despacho:* https://www.one4cars.com/despacho.php/`
+    },
+    '9': {
+        keywords: ['humano', 'operador', 'persona', 'agente', 'ayuda', 'soporte', 'hablar con alguien', 'asesor'],
+        response: `9️⃣ *Asesor Humano:* Indique su duda y un operador revisará el caso pronto. 👩‍💻`
+    }
+};
 
 let qrCodeData = "Iniciando...";
 let socketBot = null;
@@ -130,6 +172,26 @@ async function buscarVendedor(jid, pushName) {
     return r[0] || null;
 }
 
+/**
+ * DETECTA SI EL USUARIO QUIERE UNA OPCIÓN DEL MENÚ
+ */
+function detectarIntencionMenu(texto) {
+    if (!texto) return null;
+    // 1. Verificar si el usuario escribió solo el número (ej: "1", "2")
+    if (/^\d$/.test(texto)) {
+        const num = texto.charAt(0);
+        if (MENU_INTENTIONS[num]) return MENU_INTENTIONS[num].response;
+    }
+    // 2. Verificar si el texto contiene palabras clave
+    for (const key in MENU_INTENTIONS) {
+        const intention = MENU_INTENTIONS[key];
+        if (intention.keywords.some(word => texto.includes(word))) {
+            return intention.response;
+        }
+    }
+    return null;
+}
+
 // ===== BASE DE DATOS =====
 async function initDB() {
     try {
@@ -190,8 +252,6 @@ async function buscarCliente(rifLimpio) {
 
 /**
  * BÚSQUEDA DE PRODUCTOS OPTIMIZADA
- * Prioridad 1: Coincidencia ESTRICTA (AND) - Todas las palabras deben estar.
- * Prioridad 2: Coincidencia por RELEVANCIA - Solo si la prioridad 1 falló.
  */
 async function buscarProductoPorTexto(texto) {
     const txtNormal = normalizar(texto);
@@ -247,7 +307,6 @@ async function buscarProductoPorTexto(texto) {
 
     const stockCondition = "(cantidad_existencia + cantidad_existencia_almacen > 0)";
     
-    // --- PRIORIDAD 1: BÚSQUEDA ESTRICTA (Todo debe coincidir) ---
     let whereClause = "";
     let queryParams = [];
 
@@ -262,12 +321,11 @@ async function buscarProductoPorTexto(texto) {
     try {
         const sql = `SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE ${stockCondition} AND ${whereClause} LIMIT 8`;
         const [rows] = await pool.execute(sql, queryParams);
-        if (rows.length > 0) return rows; // Si encontró coincidencia total, retornamos inmediatamente.
+        if (rows.length > 0) return rows;
     } catch (e) {
         console.log("Error Intento 1:", e.message);
     }
 
-    // --- PRIORIDAD 2: BÚSQUEDA POR RELEVANCIA (Solo si el AND falló) ---
     let minRelevance = 1;
     if (palabrasBase.length >= 3) minRelevance = 2; 
     if (palabrasBase.length >= 5) minRelevance = 3;
@@ -580,18 +638,39 @@ async function startBot() {
                 }
             }
 
-            // --- 2. LÓGICA DE DESPACHOS Y TIEMPOS (NUEVO) ---
+            // --- 2. DETECCIÓN INTELIGENTE DEL MENÚ (SINÓNIMOS E INTENCIONES) ---
+            const menuOption = detectarIntencionMenu(text);
+            if (menuOption) {
+                // Caso especial: Si la intención es "Estado de Cuenta", ejecutar lógica de saldo
+                if (menuOption.includes('Estado de cuenta')) {
+                    const targetID = sesion?.id_cliente_int;
+                    if (!targetID) {
+                        return await safeSendMessage(from, { text: "Para consultar su estado de cuenta, por favor envíe su *RIF* para identificarlo." });
+                    }
+                    const facturas = await obtenerDetalleFacturas(targetID);
+                    if (facturas.length === 0) return await safeSendMessage(from, { text: "✅ No posee facturas pendientes." });
+                    let totalP = 0; let listado = "*📄 FACTURAS PENDIENTES:*\n\n";
+                    facturas.forEach(f => {
+                        const monto = (f.total - f.abono_factura) / (f.porcentaje || 1);
+                        totalP += monto;
+                        const fReg = new Date(f.fecha_reg).toISOString().split('T')[0];
+                        const params = `id_factura=${f.id_factura}&nro_factura=${f.nro_factura}&fecha_reg=${fReg}&total=${f.total}&abono_factura=${f.abono_factura}&nombres=${encodeURIComponent(f.nombres.trim())}&nombre=${encodeURIComponent(f.nombre_vendedor.trim())}&direccion=${encodeURIComponent(f.direccion.trim())}&cedula=${f.cedula.trim()}&celular=${encodeURIComponent(f.celular.trim())}&telefono=${encodeURIComponent(f.telefono.trim())}&id_cliente=${f.id_cliente}&zona=${encodeURIComponent(f.zona.trim())}&descuento=${f.descuento}&total_desc=${f.total_desc}`;
+                        listado += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n📄 PDF: https://one4cars.com/sevencorp/factura_full_reporte_web.php?${params}\n\n`;
+                    });
+                    listado += `💰 *TOTAL A PAGAR: $${totalP.toFixed(2)}*`;
+                    return await safeSendMessage(from, { text: listado });
+                }
+                // Para el resto de opciones, enviar el enlace/respuesta del mapa
+                return await safeSendMessage(from, { text: menuOption });
+            }
+
+            // --- 3. LÓGICA DE DESPACHOS Y TIEMPOS ---
             if (text.includes("cuando llega mi pedido") || 
                 text.includes("tiempo tardan en despachar") || 
                 text.includes("cuando me llega") || 
                 text.includes("tiempo de entrega") || 
                 text.includes("cuanto tarda el envio")) {
                 return await safeSendMessage(from, { text: "Saludos estimado cliente, su pedido esta disponible en un lapso no mayor de 24 horas" });
-            }
-
-            // --- 3. LÓGICA DE PAGO MÓVIL ---
-            if (text.includes("pago movil") || text.includes("forma de pago") || text.includes("datos")) {
-                return await safeSendMessage(from, { text: "Saludos este es Nuestro Pago Movil\n04142423348\nV12959286\nBanesco" });
             }
 
             // --- 4. LÓGICA DE PRODUCTOS ---
@@ -644,23 +723,6 @@ async function startBot() {
                 return await safeSendMessage(from, { text: saludoCordial });
             }
             
-            if (text.includes("saldo") || text === '2') {
-                const targetID = sesion?.id_cliente_int;
-                if (!targetID) return await safeSendMessage(from, { text: "Por favor envíe su RIF para identificarse." });
-                const facturas = await obtenerDetalleFacturas(targetID);
-                if (facturas.length === 0) return await safeSendMessage(from, { text: "✅ No posee facturas pendientes." });
-                let totalP = 0; let listado = "*📄 FACTURAS PENDIENTES:*\n\n";
-                facturas.forEach(f => {
-                    const monto = (f.total - f.abono_factura) / (f.porcentaje || 1);
-                    totalP += monto;
-                    const fReg = new Date(f.fecha_reg).toISOString().split('T')[0];
-                    const params = `id_factura=${f.id_factura}&nro_factura=${f.nro_factura}&fecha_reg=${fReg}&total=${f.total}&abono_factura=${f.abono_factura}&nombres=${encodeURIComponent(f.nombres.trim())}&nombre=${encodeURIComponent(f.nombre_vendedor.trim())}&direccion=${encodeURIComponent(f.direccion.trim())}&cedula=${f.cedula.trim()}&celular=${encodeURIComponent(f.celular.trim())}&telefono=${encodeURIComponent(f.telefono.trim())}&id_cliente=${f.id_cliente}&zona=${encodeURIComponent(f.zona.trim())}&descuento=${f.descuento}&total_desc=${f.total_desc}`;
-                    listado += `🔸 *#${f.nro_factura}* | $${monto.toFixed(2)}\n📄 PDF: https://one4cars.com/sevencorp/factura_full_reporte_web.php?${params}\n\n`;
-                });
-                listado += `💰 *TOTAL A PAGAR: $${totalP.toFixed(2)}*`;
-                return await safeSendMessage(from, { text: listado });
-            }
-
             // --- 7. FALLBACK ---
             const conversationalShorts = ['si', 'no', 'ok', 'vale', 'gracias', 'ya', 'entendido', 'está bien', 'bueno', 'dale', 'está ok', 'está bien', 'claro'];
             if (conversationalShorts.includes(text)) return; 
