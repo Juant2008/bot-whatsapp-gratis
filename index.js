@@ -666,7 +666,7 @@ const saludos = [
         const conversationalShorts = ['si', 'no', 'ok', 'vale', 'gracias', 'ya', 'entendido', 'está bien', 'bueno', 'dale', 'está ok', 'está bien', 'claro'];
         if (conversationalShorts.includes(text)) return; 
 
-        if (rawText.length > 120) return;
+        if (rawText.length > 220) return;
 
         await safeSendMessage(from, { text: "Lo siento, no logré entender tu solicitud. 😕 ¿Podrías darme más detalles o escribir *menu* para ver nuestras opciones?" });
         } catch (e) { console.log("[MSG] Error en handler de mensajes:", e.message); }
