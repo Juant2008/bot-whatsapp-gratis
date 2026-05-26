@@ -630,7 +630,7 @@ async function startBot() {
                     await guardarUsuario(from, rifLimpio, c.id_cliente);
                     const facturas = await obtenerDetalleFacturas(c.id_cliente);
                     let totalP = 0; 
-                    let list = `⭐ *CONSULTA DE ESTADO DE CUCHA (ADMIN)*\nCliente: ${c.nombres}\nRIF: ${rifLimpio}\n\n`;
+                    let list = `⭐ *CONSULTA DE ESTADO DE CUENTA (ADMIN)*\nCliente: ${c.nombres}\nRIF: ${rifLimpio}\n\n`;
                     if (facturas.length === 0) {
                         list += `✅ Sin facturas pendientes.`;
                     } else {
@@ -695,6 +695,12 @@ async function startBot() {
                 return await safeSendMessage(from, { text: "Saludos estimado cliente, su pedido está disponible en un lapso no mayor de 24 horas" });
             }
 
+            // --- NUEVO: ENTRADAS DE SALUDOS EXTENDIDOS Y CORTESÍA ---
+            if (text === 'hola buenos dias' || text === 'buenos dias' || text === 'como estas' || text === 'como estas tu' || text === 'hola como estas') {
+                const saludoCalido = `¡Hola! Gusto en saludarlo estimado. Buenos días también para usted. ¿Cómo está? Aca estamos, gracias por preguntar. Estoy atento para lo que necesite. 😊\n\n${MENU_TEXT}`;
+                return await safeSendMessage(from, { text: saludoCalido });
+            }
+
             // --- 4. LÓGICA DE PRODUCTOS (MEJORADA Y CORREGIDA) ---
             let codigoABuscar = "";
             const palabras = rawText.split(/\s+/);
@@ -724,7 +730,7 @@ async function startBot() {
             const contienePalabraInventario = palabrasClaveInventario.some(p => text.includes(p));
 
             if (codigoABuscar === "") {
-                const comandosValidos = ['dolar', 'bcv', 'paralelo', 'menu', 'hola', 'buen dia', 'buenos dias', 'buenas tardes', 'pago fact', 'abono'];
+                const comandosValidos = ['dolar', 'bcv', 'paralelo', 'menu', 'hola', 'buen dia', 'buenos dias', 'buenas tardes', 'pago fact', 'abono', 'como estas', 'como estas tu'];
                 const coincideComando = comandosValidos.includes(text);
                 
                 if (isAdmin) {
@@ -751,7 +757,7 @@ async function startBot() {
                 return;
             }
 
-            if (codigoABuscar !== "" || contienePalabraInventario || (text !== 'menu' && !['hola', 'buen dia', 'buenos dias', 'buenas tardes'].includes(text))) {
+            if (codigoABuscar !== "" || contienePalabraInventario || (text !== 'menu' && !['hola', 'buen dia', 'buenos dias', 'buenas tardes', 'como estas', 'como estas tu'].includes(text))) {
                 try {
                     let prods = null;
                     
@@ -815,7 +821,7 @@ async function startBot() {
 
             // --- 6. SALUDO Y MENÚ ---
             if (text === 'menu' || text === 'hola' || text === 'buen dia' || text === 'buenos dias') {
-                const nombreUsuario = vendedor ? vendedor.nombre : pushName;
+                const nombreUsuario = seller ? seller.nombre : pushName;
                 const saludoCordial = `¡Hola *${nombreUsuario}*! Es un gusto saludarte. 😊\n\n¿En qué podemos ayudarte hoy? Por favor, indícanos qué servicio necesitas o consulta nuestro menú a continuación:\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
@@ -913,7 +919,7 @@ const server = http.createServer(async (req, res) => {
         const enviados = await notificador.obtenerRecordatoriosEnviados();
         res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><title>Recordatorios</title></head><body class="bg-light">${header}<div class="container mt-5"><div class="card shadow-lg p-4 mx-auto" style="max-width: 800px; border-radius: 15px;"><h3>📅 Recordatorios</h3><hr><table class="table table-sm"><thead><tr><th>Factura</th><th>Cliente</th><th>Días</th><th>Estado</th></tr></thead><tbody>${facturas.map(f => `<tr><td>${f.nro_factura}</td><td>${f.nombres}</td><td>${f.dias_vencida}</td><td>${(enviados[f.id_factura]) ? '✅' : '⏳'}</td></tr>`).join('')}</tbody></table><a href="/" class="btn btn-outline-secondary">Volver</a></div></div></body></html>`);
     } else {
-        res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><meta http-equiv="refresh" content="30"><title>Admin ONE4CARS</title></head><body style="background-color: #f4f7f6;">${header}<div class="container text-center"><div class="card shadow-lg p-4 mx-auto" style="max-width: 500px; border-radius: 15px;"><h4 class="mb-3">Estado del Bot</h4><div class="my-4">${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" class="img-fluid rounded" style="max-width: 250px;">` : `<h2 class="text-success">${qrCodeData}</h2>`}</div><p>BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}</p><div class="d-grid gap-2"><a href="/cobranza" class="btn btn-primary">PANEL DE COBRANZA</a><a href="/marketing-panel" class="btn btn-info text-white">PANEL DE MARKETING</a><a href="/notificador-estado" class="btn btn-secondary text-white">NOTIFICADOR</a><a href="/recordatorio-estado" class="btn btn-warning text-dark">RECORDATORIOS</a></div></div></div></body></html>`);
+        res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><meta http-equiv="refresh" content="30"><title>Admin ONE4CARS</title></head><body style="background-color: #f4f7f6;\">${header}<div class="container text-center"><div class="card shadow-lg p-4 mx-auto" style="max-width: 500px; border-radius: 15px;"><h4 class="mb-3">Estado del Bot</h4><div class="my-4">${qrCodeData.startsWith('data') ? `<img src="${qrCodeData}" class="img-fluid rounded" style="max-width: 250px;">` : `<h2 class="text-success">${qrCodeData}</h2>`}</div><p>BCV: ${dolarInfo.bcv} | Paralelo: ${dolarInfo.paralelo}</p><div class="d-grid gap-2"><a href="/cobranza" class="btn btn-primary">PANEL DE COBRANZA</a><a href="/marketing-panel" class="btn btn-info text-white">PANEL DE MARKETING</a><a href="/notificador-estado" class="btn btn-secondary text-white">NOTIFICADOR</a><a href="/recordatorio-estado" class="btn btn-warning text-dark">RECORDATORIOS</a></div></div></div></body></html>`);
     }
 });
 
