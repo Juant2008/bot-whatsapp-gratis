@@ -711,6 +711,36 @@ async function startBot() {
                 codigoABuscar = posibleCodigo.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?!]/g, "");
             }
 
+            // FILTRO INTELIGENTE CONVERSACIONAL (Para no interrumpir chats aleatorios ni dar fallbacks falsos)
+            let esConversacionalAleatorio = false;
+            if (codigoABuscar === "") {
+                const comandosValidos = ['dolar', 'bcv', 'paralelo', 'menu', 'hola', 'buen dia', 'buenos dias', 'buenas tardes', 'pago fact', 'abono'];
+                const coincideComando = comandosValidos.includes(text);
+                
+                if (isAdmin) {
+                    // Si es administrador conversando casualmente y no es un comando ni un código, el bot se queda en silencio absoluto
+                    if (!coincideComando) {
+                        esConversacionalAleatorio = true;
+                    }
+                } else {
+                    // Para usuarios comunes, si el texto es largo y no contiene palabras clave de intención directa de búsqueda
+                    const palabrasFiltro = palabras.filter(p => p.length > 1);
+                    const tieneIntencionBusqueda = text.includes('tienes') || text.includes('hay') || text.includes('busco') || 
+                                                   text.includes('precio') || text.includes('venden') || text.includes('disponibilidad') || 
+                                                   text.includes('buscar') || text.includes('necesito') || text.includes('cotizar') ||
+                                                   text.includes('filtro') || text.includes('tapa') || text.includes('repuesto') || text.includes('producto');
+                    
+                    if (!coincideComando && !tieneIntencionBusqueda && palabrasFiltro.length > 6) {
+                        esConversacionalAleatorio = true;
+                    }
+                }
+            }
+
+            // Si es una conversación casual detectada, salimos sin responder nada y el bot no se entromete
+            if (esConversacionalAleatorio) {
+                return;
+            }
+
             if (codigoABuscar !== "" || (text !== 'menu' && !['hola', 'buen dia', 'buenos dias', 'buenas tardes'].includes(text))) {
                 try {
                     let prods = null;
