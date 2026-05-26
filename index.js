@@ -440,7 +440,7 @@ function obtenerTonoMensaje(nivel, f, monto, fecha) {
     if (nivel >= 60) {
         return `🧾 *AVISO DE PAGO PENDIENTE*\n\nHola *${f.nombres}*, la factura *N° ${f.nro_factura}* emitida el *${fecha}* ya superó los 60 días de vencida con un saldo de *$${monto.toFixed(2)}*.\n\nEl retraso en el pago afecta la rotación de nuestros productos y la disponibilidad de inventario para todos nuestros clientes. Le agradecemos realizar el pago a la mayor brevedad posible.\n\nQuedamos a su disposición para cualquier duda o gestión. 🚗`;
     }
-    return `🧾 *RECORDATORIO DE PAGO*\n\nHola *${f.nombres}*, le recordamos amablemente que la factura *N° ${f.nro_factura}* con fecha *${fecha}* presenta un saldo pendiente de *$${monto.toFixed(2)}*.\n\nLe agradecemos gestionar el pago para mantener su cuenta al día. Estamos a su disposición para cualquier consulta. 🚗`;
+    return `🧾 *RECORDATORIO DE PAGO*\n\nHola *${f.nombres}*, le recordamos amablemente que la factura *N° ${f.nro_factura}* con fecha *${fecha}* presents un saldo pendiente de *$${monto.toFixed(2)}*.\n\nLe agradecemos gestionar el pago para mantener su cuenta al día. Estamos a su disposición para cualquier consulta. 🚗`;
 }
 
 async function checkFacturasVencidas() {
@@ -630,7 +630,7 @@ async function startBot() {
                     await guardarUsuario(from, rifLimpio, c.id_cliente);
                     const facturas = await obtenerDetalleFacturas(c.id_cliente);
                     let totalP = 0; 
-                    let list = `⭐ *CONSULTA DE ESTADO DE CUENTA (ADMIN)*\nCliente: ${c.nombres}\nRIF: ${rifLimpio}\n\n`;
+                    let list = `⭐ *CONSULTA DE ESTADO DE CUCHA (ADMIN)*\nCliente: ${c.nombres}\nRIF: ${rifLimpio}\n\n`;
                     if (facturas.length === 0) {
                         list += `✅ Sin facturas pendientes.`;
                     } else {
@@ -674,15 +674,15 @@ async function startBot() {
             
             // --- NUEVO: LÓGICA DE PAGO / ABONO ---
             if (text === 'pago fact' || text === 'abono'  || text.includes('pago') || text.includes('al señor oscar') || text.includes('envié el pago') || text.includes('adjunto pago')) {
-                const nombreUsuario = seller ? seller.nombre : pushName;
+                const nombreUsuario = vendedor ? vendedor.nombre : pushName;
                 const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nRecibido tu mensaje, administración validará su pago a la brevedad.\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
 
             // --- NUEVO: Factura Fiscal ---
             if (text === 'pago fact' || text === 'factura fiscal'  || text.includes('factura con iva')  ) {
-                const nombreUsuario = seller ? seller.nombre : pushName;
-                const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nLa Factura Fiscal sera realizada de acuerdo con su solicitud el dia que tenga disponibilidad de hacer el pago.\n\n${MENU_TEXT}`;
+                const nombreUsuario = vendedor ? vendedor.nombre : pushName;
+                const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nLa Factura Fiscal será realizada de acuerdo con su solicitud el día que tenga disponibilidad de hacer el pago.\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
             
@@ -692,7 +692,7 @@ async function startBot() {
                 text.includes("cuando me llega") || 
                 text.includes("tiempo de entrega") || 
                 text.includes("cuanto tarda el envio")) {
-                return await safeSendMessage(from, { text: "Saludos estimado cliente, su pedido esta disponible en un lapso no mayor de 24 horas" });
+                return await safeSendMessage(from, { text: "Saludos estimado cliente, su pedido está disponible en un lapso no mayor de 24 horas" });
             }
 
             // --- 4. LÓGICA DE PRODUCTOS (MEJORADA Y CORREGIDA) ---
@@ -715,7 +715,7 @@ async function startBot() {
             // FILTRO INTELIGENTE CONVERSACIONAL ACTUALIZADO
             let esConversacionalAleatorio = false;
             
-            // Palabras clave de repuestos del inventario para asegurar que el bot SÍ responda búsquedas de texto corto de Admins
+            // Palabras clave de repuestos del inventario para asegurar que el bot SÍ responda búsquedas de texto corto
             const palabrasClaveInventario = [
                 'yaris', 'fiesta', 'rolinera', 'tapa', 'tapas', 'filtro', 'filtros', 'radiador', 'motor', 
                 'envase', 'deposito', 'refrigerante', 'ka', 'ecosport', 'optra', 'empacadura', 'valvula', 'cerato'
@@ -728,8 +728,8 @@ async function startBot() {
                 const coincideComando = comandosValidos.includes(text);
                 
                 if (isAdmin) {
-                    // Si el admin habla de algo casual que no contiene comandos, ni códigos, NI palabras de repuestos, se guarda silencio.
-                    if (!coincideComando && !contienePalabraInventario) {
+                    // SI ES ADMIN Y EL MENSAJE ES UN TEXTO LARGO (MÁS DE 5 PALABRAS), ES UNA CHARLA CASUAL. SE QUEDA COMPLETAMENTE CALLADO.
+                    if (!coincideComando && (palabras.length > 5 || !contienePalabraInventario)) {
                         esConversacionalAleatorio = true;
                     }
                 } else {
@@ -817,12 +817,6 @@ async function startBot() {
             if (text === 'menu' || text === 'hola' || text === 'buen dia' || text === 'buenos dias') {
                 const nombreUsuario = vendedor ? vendedor.nombre : pushName;
                 const saludoCordial = `¡Hola *${nombreUsuario}*! Es un gusto saludarte. 😊\n\n¿En qué podemos ayudarte hoy? Por favor, indícanos qué servicio necesitas o consulta nuestro menú a continuación:\n\n${MENU_TEXT}`;
-                return await safeSendMessage(from, { text: saludoCordial });
-            }
-
-            if (text === 'Pago fact' || text === 'Abono' ) {
-                const nombreUsuario = vendedor ? vendedor.nombre : pushName;
-                const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nrecibido tu mensaje, administracion validara su pago a la brevedad\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
             
