@@ -56,7 +56,7 @@ const MENU_TEXT = `📋 *MENÚ PRINCIPAL ONE4CARS*
 
 _Escriba el número de la opción o su consulta directamente._`;
 
-// ===== MAPA DE INTENCIONES REFORMULADO (Para evitar falsos positivos) =====
+// ===== MAPA DE INTENCIONES REFORMULADO =====
 const MENU_INTENTIONS = {
     '1': {
         keywords: ['medios de pago', 'pago movil', 'datos de pago', 'como pagar', 'datos bancarios', 'cuentas para pagar'],
@@ -172,12 +172,10 @@ async function buscarVendedor(jid, pushName) {
 
 function detectarIntencionMenu(texto) {
     if (!texto) return null;
-    // 1. Verificar si el usuario escribió solo el número (ej: "1", "2")
     if (/^\d$/.test(texto)) {
         const num = texto.charAt(0);
         if (MENU_INTENTIONS[num]) return MENU_INTENTIONS[num].response;
     }
-    // 2. Verificar frases completas para evitar falsos positivos
     for (const key in MENU_INTENTIONS) {
         const intention = MENU_INTENTIONS[key];
         if (intention.keywords.some(phrase => texto.includes(phrase))) {
@@ -245,6 +243,7 @@ async function buscarCliente(rifLimpio) {
     return r[0] || null;
 }
 
+// ===== LÓGICA MEJORADA DE BÚSQUEDA DE PRODUCTOS =====
 async function buscarProductoPorTexto(texto) {
     const txtNormal = normalizar(texto);
     const stopWords = [
@@ -302,12 +301,17 @@ async function buscarProductoPorTexto(texto) {
     let whereClause = "";
     let queryParams = [];
 
+    // INTENTO 1: Búsqueda Estricta (Todas las palabras deben coincidir en cualquiera de los 3 campos)
     palabrasBase.forEach((pal, index) => {
         const formas = expandirFormas(pal);
-        const conditions = formas.map(() => "descripcion LIKE ?");
+        // Buscamos la palabra en descripcion, producto o equivalencia
+        const conditions = formas.map(() => "(descripcion LIKE ? OR producto LIKE ? OR equivalencia LIKE ?)");
         whereClause += `(${conditions.join(" OR ")})`;
         if (index < palabrasBase.length - 1) whereClause += " AND ";
-        formas.forEach(f => queryParams.push(`%${f}%`));
+        formas.forEach(f => {
+            const pattern = `%${f}%`;
+            queryParams.push(pattern, pattern, pattern);
+        });
     });
 
     try {
@@ -318,17 +322,21 @@ async function buscarProductoPorTexto(texto) {
         console.log("Error Intento 1:", e.message);
     }
 
+    // INTENTO 2: Búsqueda por Relevancia (Si no hay coincidencia total)
     let minRelevance = 1;
     if (palabrasBase.length >= 3) minRelevance = 2; 
     if (palabrasBase.length >= 5) minRelevance = 3;
 
     const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
-    const orConditions = expandedTerms.map(() => "descripcion LIKE ?");
-    const orParams = expandedTerms.map(p => `%${p}%`);
+    const orConditions = expandedTerms.map(() => "(descripcion LIKE ? OR producto LIKE ? OR equivalencia LIKE ?)");
+    const orParams = expandedTerms.flatMap(p => [`%${p}%`, `%${p}%`, `%${p}%`]);
 
     const relevanceParts = palabrasBase.map(p => {
         const formas = expandirFormas(p);
-        const cases = formas.map(f => `descripcion LIKE '%${f.replace(/[^a-z]/g, '')}%'`);
+        const cases = formas.map(f => {
+            const term = f.replace(/[^a-z0-9x]/g, ''); // Mantenemos 'x' para medidas
+            return `(descripcion LIKE '%${term}%' OR producto LIKE '%${term}%' OR equivalencia LIKE '%${term}%')`;
+        });
         return `(CASE WHEN ${cases.join(' OR ')} THEN 1 ELSE 0 END)`;
     });
     const relevanceSQL = relevanceParts.join(' + ');
@@ -653,23 +661,21 @@ async function startBot() {
                 }
                 return await safeSendMessage(from, { text: menuOption });
             }
-         // ============================================================
-            // NUEVO: LÓGICA DE PAGO / ABONO (COLOCAR AQUÍ)
-            // ============================================================
+
+            // LÓGICA DE PAGO / ABONO
             if (text === 'pago fact' || text === 'abono'  || text.includes('pago') || text.includes('al señor oscar') || text.includes('envié el pago') || text.includes('adjunto pago')) {
                 const nombreUsuario = vendedor ? vendedor.nombre : pushName;
                 const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nRecibido tu mensaje, administración validará su pago a la brevedad.\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
 
-                     // ============================================================
-            // NUEVO: (Factura Fiscal)
-            // ============================================================
+            // LÓGICA DE FACTURA FISCAL
             if (text === 'pago fact' || text === 'factura fiscal'  || text.includes('factura con iva')  ) {
                 const nombreUsuario = vendedor ? vendedor.nombre : pushName;
                 const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nLa Factura Fiscalk sera realizada de acuerdo con su solicitud el dia que tenga disponibilidad de hacer el pago.\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
+
             // --- 3. LÓGICA DE DESPACHOS Y TIEMPOS ---
             if (text.includes("cuando llega mi pedido") || 
                 text.includes("tiempo tardan en despachar") || 
@@ -729,13 +735,6 @@ async function startBot() {
                 return await safeSendMessage(from, { text: saludoCordial });
             }
 
-                        // --- 6. SALUDO Y MENÚ ---
-            if (text === 'Pago fact' || text === 'Abono' ) {
-                const nombreUsuario = vendedor ? vendedor.nombre : pushName;
-                const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nrecibido tu mensaje, administracion validara su pago a la brevedad\n\n${MENU_TEXT}`;
-                return await safeSendMessage(from, { text: saludoCordial });
-            }
-            
             // --- 7. FALLBACK ---
             const conversationalShorts = ['si', 'no', 'ok', 'vale', 'gracias', 'ya', 'entendido', 'está bien', 'bueno', 'dale', 'está ok', 'está bien', 'claro'];
             if (conversationalShorts.includes(text)) return; 
@@ -839,4 +838,3 @@ server.listen(PORT, '0.0.0.0', async () => {
     actualizarDolar();
     setInterval(actualizarDolar, 3600000);
 });
-
