@@ -235,7 +235,6 @@ async function guardarUsuario(jid, usuario, id_int) {
 
 async function buscarCliente(rifLimpio) {
     const soloNum = soloNumerosRIF(rifLimpio);
-    // IGNORAR GUIONES Y PUNTOS EN LA BÚSQUEDA PARA QUE COINCIDA CON LA DB
     const [r] = await pool.execute(
         `SELECT id_cliente, nombres, celular, cedula, direccion, zona 
          FROM tab_clientes 
@@ -250,7 +249,6 @@ async function buscarCliente(rifLimpio) {
 
 async function buscarProductoPorCodigo(codigo) {
     const codLimpio = codigo.trim();
-    // SE ELIMINÓ EL LÍMITE DE STOCK AQUÍ PARA SABER SI EL PRODUCTO EXISTE (AUNQUE ESTÉ AGOTADO)
     try {
         const sql = `SELECT producto, descripcion, tipo, precio_final, (cantidad_existencia + cantidad_existencia_almacen) as stock 
                      FROM tab_productos 
@@ -697,26 +695,35 @@ async function startBot() {
                 return await safeSendMessage(from, { text: "Saludos estimado cliente, su pedido esta disponible en un lapso no mayor de 24 horas" });
             }
 
-// --- 4. LÓGICA DE PRODUCTOS (MEJORADA) ---
-            // Nueva lógica: EXTRAEMOS posibles códigos antes de descartar la oración
+            // --- 4. LÓGICA DE PRODUCTOS (MEJORADA Y CORREGIDA) ---
             let codigoABuscar = "";
             const palabras = rawText.split(/\s+/);
             
-            // Intentamos detectar códigos comunes (ej: MF283, 513113)
-            // Busca palabras que contengan letras y números o solo números largos
-            const posibleCodigo = palabras.find(p => /^[A-Z0-9]{3,}$/i.test(p.replace(/[.,?]/g, '')));
+            // Buscamos un código real: Debe tener letras Y números (ej: MF283) o ser una cadena larga de números puros (ej: 513113)
+            const posibleCodigo = palabras.find(p => {
+                const limpia = p.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?!]/g, "");
+                const tieneLetras = /[a-zA-Z]/.test(limpia);
+                const tieneNumeros = /[0-9]/.test(limpia);
+                return (tieneLetras && tieneNumeros && limpia.length >= 3) || (/^[0-9]{4,}$/.test(limpia));
+            });
             
             if (posibleCodigo) {
-                codigoABuscar = posibleCodigo.replace(/[.,?]/g, '');
+                codigoABuscar = posibleCodigo.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?!]/g, "");
             }
 
             if (codigoABuscar !== "" || (text !== 'menu' && !['hola', 'buen dia', 'buenos dias', 'buenas tardes'].includes(text))) {
                 try {
-                    // Usamos el código extraído si existe, sino, buscamos por texto normal
-                    let prods = await buscarProductoPorCodigo(codigoABuscar || rawText);
+                    let prods = null;
                     
+                    // Si encontramos algo que cumple como código, lo buscamos primero
+                    if (codigoABuscar !== "") {
+                        prods = await buscarProductoPorCodigo(codigoABuscar);
+                    }
+                    
+                    // Si no se encontró por código o no había código en absoluto,
+                    // buscamos por descripción pero usando el TEXTO COMPLETO ORIGINAL (rawText)
                     if (!prods || prods.length === 0) {
-                        prods = await buscarProductoPorTexto(codigoABuscar || rawText);
+                        prods = await buscarProductoPorTexto(rawText);
                     }
 
                     if (prods && prods.length > 0) {
