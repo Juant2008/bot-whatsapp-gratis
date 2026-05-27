@@ -249,11 +249,11 @@ async function buscarProductoPorCodigo(codigo) {
     const codLimpio = codigo.trim();
     const stockCondition = "(cantidad_existencia + cantidad_existencia_almacen > 0)";
     try {
-        const sql = `SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE (producto = ? OR producto LIKE ?) AND ${stockCondition} LIMIT 8`;
-        const [rows] = await pool.execute(sql, [codLimpio, `%${codLimpio}%`]);
+        const sql = `SELECT producto, descripcion, tipo, precio_final FROM tab_productos WHERE producto = ? AND ${stockCondition} LIMIT 1`;
+        const [rows] = await pool.execute(sql, [codLimpio]);
         if (rows.length > 0) return rows;
     } catch (e) {
-        console.log("Error buscando por código exacto/parcial:", e.message);
+        console.log("Error buscando por código exacto:", e.message);
     }
     return null;
 }
@@ -317,13 +317,10 @@ async function buscarProductoPorTexto(texto) {
 
     palabrasBase.forEach((pal, index) => {
         const formas = expandirFormas(pal);
-        const conditions = formas.map(() => "(descripcion LIKE ? OR producto LIKE ?)");
+        const conditions = formas.map(() => "descripcion LIKE ?");
         whereClause += `(${conditions.join(" OR ")})`;
         if (index < palabrasBase.length - 1) whereClause += " AND ";
-        formas.forEach(f => {
-            queryParams.push(`%${f}%`);
-            queryParams.push(`%${f}%`);
-        });
+        formas.forEach(f => queryParams.push(`%${f}%`));
     });
 
     try {
@@ -339,19 +336,12 @@ async function buscarProductoPorTexto(texto) {
     if (palabrasBase.length >= 5) minRelevance = 3;
 
     const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
-    const orConditions = expandedTerms.map(() => "(descripcion LIKE ? OR producto LIKE ?)");
-    const orParams = [];
-    expandedTerms.forEach(p => {
-        orParams.push(`%${p}%`);
-        orParams.push(`%${p}%`);
-    });
+    const orConditions = expandedTerms.map(() => "descripcion LIKE ?");
+    const orParams = expandedTerms.map(p => `%${p}%`);
 
     const relevanceParts = palabrasBase.map(p => {
         const formas = expandirFormas(p);
-        const cases = formas.map(f => {
-            const fLimpia = f.replace(/[^a-zA-Z0-9]/g, '');
-            return `descripcion LIKE '%${fLimpia}%' OR producto LIKE '%${fLimpia}%'`;
-        });
+        const cases = formas.map(f => `descripcion LIKE '%${f.replace(/[^a-z]/g, '')}%'`);
         return `(CASE WHEN ${cases.join(' OR ')} THEN 1 ELSE 0 END)`;
     });
     const relevanceSQL = relevanceParts.join(' + ');
@@ -555,7 +545,7 @@ async function startBot() {
             socketBot.removeAllListeners();
             socketBot.end(undefined);
         } catch (e) {}
-            socketBot = null;
+        socketBot = null;
     }
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -679,7 +669,8 @@ async function startBot() {
                 }
                 return await safeSendMessage(from, { text: menuOption });
             }
-         // ============================================================
+
+            // ============================================================
             // NUEVO: LÓGICA DE PAGO / ABONO (COLOCAR AQUÍ)
             // ============================================================
             if (text === 'pago fact' || text === 'abono'  || text.includes('pago') || text.includes('al señor oscar') || text.includes('envié el pago') || text.includes('adjunto pago')) {
@@ -688,14 +679,15 @@ async function startBot() {
                 return await safeSendMessage(from, { text: saludoCordial });
             }
 
-                     // ============================================================
+            // ============================================================
             // NUEVO: (Factura Fiscal)
             // ============================================================
-            if (text === 'pago fact' || text === 'factura fiscal'  || text.includes('factura con iva')  ) {
+            if (text === 'factura fiscal' || text.includes('factura con iva')  ) {
                 const nombreUsuario = vendedor ? vendedor.nombre : pushName;
-                const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nLa Factura Fiscalk sera realizada de acuerdo con su solicitud el dia que tenga disponibilidad de hacer el pago.\n\n${MENU_TEXT}`;
+                const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nLa Factura Fiscal será realizada de acuerdo con su solicitud el día que tenga disponibilidad de hacer el pago.\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
+
             // --- 3. LÓGICA DE DESPACHOS Y TIEMPOS ---
             if (text.includes("cuando llega mi pedido") || 
                 text.includes("tiempo tardan en despachar") || 
@@ -706,7 +698,7 @@ async function startBot() {
             }
 
             // --- 4. LÓGICA DE PRODUCTOS ---
-            if (text !== 'menu' && !['hola', 'buen dia', 'buonos dias'].includes(text)) {
+            if (text !== 'menu' && !['hola', 'buen dia', 'buenos dias'].includes(text)) {
                 try {
                     // SE AÑADIÓ LA BÚSQUEDA DIRECTA POR CÓDIGO
                     let prods = await buscarProductoPorCodigo(rawText);
@@ -756,18 +748,11 @@ async function startBot() {
 
             // --- 6. SALUDO Y MENÚ ---
             if (text === 'menu' || text === 'hola' || text === 'buen dia' || text === 'buenos dias') {
-                const nombreUsuario = vendedor ? vendedor.nombre : pushName;
+                const nombreUsuario = seller ? seller.nombre : pushName;
                 const saludoCordial = `¡Hola *${nombreUsuario}*! Es un gusto saludarte. 😊\n\n¿En qué podemos ayudarte hoy? Por favor, indícanos qué servicio necesitas o consulta nuestro menú a continuación:\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
 
-                        // --- 6. SALUDO Y MENÚ ---
-            if (text === 'Pago fact' || text === 'Abono' ) {
-                const nombreUsuario = vendedor ? vendedor.nombre : pushName;
-                const saludoCordial = `¡Hola *${nombreUsuario}*! Gracias por su mensaje. 😊\n\nrecibido tu mensaje, administracion validara su pago a la brevedad\n\n${MENU_TEXT}`;
-                return await safeSendMessage(from, { text: saludoCordial });
-            }
-            
             // --- 7. FALLBACK ---
             const conversationalShorts = ['si', 'no', 'ok', 'vale', 'gracias', 'ya', 'entendido', 'está bien', 'bueno', 'dale', 'está ok', 'está bien', 'claro'];
             if (conversationalShorts.includes(text)) return; 
@@ -871,4 +856,3 @@ server.listen(PORT, '0.0.0.0', async () => {
     actualizarDolar();
     setInterval(actualizarDolar, 3600000);
 });
-}
