@@ -56,7 +56,7 @@ const MENU_TEXT = `📋 *MENÚ PRINCIPAL ONE4CARS*
 
 _Escriba el número de la opción o su consulta directamente._`;
 
-// ===== MAPA DE INTENCIONES REFORMULADO (Para evitar falsos positivos) =====
+// ===== MAPA DE INTENCIONES REFORMULADO =====
 const MENU_INTENTIONS = {
     '1': {
         keywords: ['medios de pago', 'pago movil', 'datos de pago', 'como pagar', 'datos bancarios', 'cuentas para pagar'],
@@ -164,7 +164,7 @@ async function setModo(tel, modo) {
 async function buscarVendedor(jid, pushName) {
     const telLimpio = jid.split('@')[0]; 
     const [r] = await pool.execute(
-        "SELECT * FROM tab_vendedores WHERE celular_vendedor LIKE ? OR telefono_vendedor LIKE ? OR nombre LIKE ? LIMIT 1", 
+        "SELECT * FROM tab_vendedores WHERE celular_vendedor LIKE (? COLLATE utf8_spanish_ci) OR telefono_vendedor LIKE (? COLLATE utf8_spanish_ci) OR nombre LIKE (? COLLATE utf8_spanish_ci) LIMIT 1", 
         [`%${telLimpio}%`, `%${telLimpio}%`, `%${pushName}%`]
     );
     return r[0] || null;
@@ -172,12 +172,10 @@ async function buscarVendedor(jid, pushName) {
 
 function detectarIntencionMenu(texto) {
     if (!texto) return null;
-    // 1. Verificar si el usuario escribió solo el número (ej: "1", "2")
     if (/^\d$/.test(texto)) {
         const num = texto.charAt(0);
         if (MENU_INTENTIONS[num]) return MENU_INTENTIONS[num].response;
     }
-    // 2. Verificar frases completas para evitar falsos positivos
     for (const key in MENU_INTENTIONS) {
         const intention = MENU_INTENTIONS[key];
         if (intention.keywords.some(phrase => texto.includes(phrase))) {
@@ -239,7 +237,7 @@ async function guardarUsuario(jid, usuario, id_int) {
 async function buscarCliente(rifLimpio) {
     const soloNum = soloNumerosRIF(rifLimpio);
     const [r] = await pool.execute(
-        "SELECT id_cliente, nombres, cellular, cedula, direccion, zona FROM tab_clientes WHERE clave = ? OR clave = ? OR clave LIKE ? LIMIT 1", 
+        "SELECT id_cliente, nombres, cellular, cedula, direccion, zona FROM tab_clientes WHERE clave = (? COLLATE utf8_spanish_ci) OR clave = (? COLLATE utf8_spanish_ci) OR clave LIKE (? COLLATE utf8_spanish_ci) LIMIT 1", 
         [rifLimpio, soloNum, `%${rifLimpio}%`]
     );
     return r[0] || null;
@@ -249,17 +247,16 @@ async function buscarProductoPorCodigo(codigo) {
     const codLimpio = codigo.trim();
     const stockCondition = "(cantidad_existencia + cantidad_existencia_almacen > 0)";
     try {
-        // CORRECCIÓN SOLICITADA: Busca por coincidencias parciales (LIKE) en el campo producto si es un código o número corto.
-        // Además ordena priorizando una coincidencia exacta al inicio si existiera, y limita a un máximo de 8 registros coincidentes.
+        // CORRECCIÓN DE COLACIÓN: Forzamos la interpretación del parámetro como utf8_spanish_ci
         const sql = `SELECT producto, descripcion, tipo, precio_final 
                      FROM tab_productos 
-                     WHERE producto LIKE ? AND ${stockCondition} 
-                     ORDER BY CASE WHEN producto = ? THEN 0 ELSE 1 END, producto ASC 
+                     WHERE producto LIKE (? COLLATE utf8_spanish_ci) AND ${stockCondition} 
+                     ORDER BY CASE WHEN producto = (? COLLATE utf8_spanish_ci) THEN 0 ELSE 1 END, producto ASC 
                      LIMIT 8`;
         const [rows] = await pool.execute(sql, [`%${codLimpio}%`, codLimpio]);
         if (rows.length > 0) return rows;
     } catch (e) {
-        console.log("Error buscando por coincidencias de código:", e.message);
+        console.log("Error buscando porcoincidencias de código:", e.message);
     }
     return null;
 }
@@ -323,9 +320,10 @@ async function buscarProductoPorTexto(texto) {
     let whereClause = "";
     let queryParams = [];
 
+    // CORRECCIÓN DE COLACIÓN: Forzamos el uso de utf8_spanish_ci en la comparación LIKE
     palabrasBase.forEach((pal, index) => {
         const formas = expandirFormas(pal);
-        const conditions = formas.map(() => "descripcion LIKE ?");
+        const conditions = formas.map(() => "descripcion LIKE (? COLLATE utf8_spanish_ci)");
         whereClause += `(${conditions.join(" OR ")})`;
         if (index < palabrasBase.length - 1) whereClause += " AND ";
         formas.forEach(f => queryParams.push(`%${f}%`));
@@ -342,12 +340,12 @@ async function buscarProductoPorTexto(texto) {
     let minRelevance = palabrasBase.length;
 
     const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
-    const orConditions = expandedTerms.map(() => "descripcion LIKE ?");
+    const orConditions = expandedTerms.map(() => "descripcion LIKE (? COLLATE utf8_spanish_ci)");
     const orParams = expandedTerms.map(p => `%${p}%`);
 
     const relevanceParts = palabrasBase.map(p => {
         const formas = expandirFormas(p);
-        const cases = formas.map(f => `descripcion LIKE '%${f.replace(/[^a-z]/g, '')}%'`);
+        const cases = formas.map(f => `descripcion LIKE '%${f.replace(/[^a-z]/g, '')}%' COLLATE utf8_spanish_ci`);
         return `(CASE WHEN ${cases.join(' OR ')} THEN 1 ELSE 0 END)`;
     });
     const relevanceSQL = relevanceParts.join(' + ');
@@ -423,7 +421,7 @@ async function checkNuevasFacturas() {
         }
     } catch (e) {
         console.log("[NOTIFICADOR] Error:", e.message);
-    } fillly {
+    } finally { // CORREGIDO: fillly cambiado a finally
         notificadorEjecutando = false;
     }
 }
@@ -481,7 +479,7 @@ async function checkFacturasVencidas() {
         }
     } catch (e) {
         console.log("[RECORDATORIO] Error:", e.message);
-    } fillly {
+    } finally { // CORREGIDO: fillly cambiado a finally
         recordatorioEjecutando = false;
     }
 }
@@ -539,7 +537,7 @@ async function checkVendedoresRecordatorio() {
         console.log(`[VENDEDORES] ${Object.keys(vendedoresMap).length} vendedor(es) notificado(s).`);
     } catch (e) {
         console.log("[VENDEDORES] Error:", e.message);
-    } fillly {
+    } finally { // CORREGIDO: fillly cambiado a finally
         vendedorEjecutando = false;
     }
 }
@@ -709,7 +707,6 @@ async function startBot() {
             // --- 4. LÓGICA DE PRODUCTOS ---
             if (text !== 'menu' && !['hola', 'buen dia', 'buenos dias'].includes(text)) {
                 try {
-                    // SE EJECUTA LA BÚSQUEDA POR COINCIDENCIAS DE CÓDIGO (PARCIAL/EXACTO) EN EL CAMPO 'PRODUCTO'
                     let prods = await buscarProductoPorCodigo(rawText);
                     
                     if (!prods) {
@@ -757,7 +754,7 @@ async function startBot() {
 
             // --- 6. SALUDO Y MENÚ ---
             if (text === 'menu' || text === 'hola' || text === 'buen dia' || text === 'buenos dias') {
-                const nombreUsuario = seller ? seller.nombre : pushName;
+                const nombreUsuario = vendedor ? vendedor.nombre : pushName; // CORREGIDO: seller cambiado a vendedor
                 const saludoCordial = `¡Hola *${nombreUsuario}*! Es un gusto saludarte. 😊\n\n¿En qué podemos ayudarte hoy? Por favor, indícanos qué servicio necesitas o consulta nuestro menú a continuación:\n\n${MENU_TEXT}`;
                 return await safeSendMessage(from, { text: saludoCordial });
             }
@@ -791,7 +788,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'});
         res.end(await marketingModulo.generarHTMLMarketing(c, v, z, header, query));
     } else if (routename === '/marketing-preview') {
-        let sql = "SELECT id_cliente, nombres, celular FROM tab_clientes WHERE celular IS NOT NULL AND celular != ''";
+        let sql = "SELECT id_cliente, nombres, cellular FROM tab_clientes WHERE celular IS NOT NULL AND celular != ''";
         const params = [];
         if (query.vendedor) { sql += " AND vendedor = ?"; params.push(query.vendedor); }
         if (query.zona) { sql += " AND zona = ?"; params.push(query.zona); }
