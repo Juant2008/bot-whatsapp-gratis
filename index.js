@@ -172,12 +172,10 @@ async function buscarVendedor(jid, pushName) {
 
 function detectarIntencionMenu(texto) {
     if (!texto) return null;
-    // 1. Verificar si el usuario escribió solo el número (ej: "1", "2")
     if (/^\d$/.test(texto)) {
         const num = texto.charAt(0);
         if (MENU_INTENTIONS[num]) return MENU_INTENTIONS[num].response;
     }
-    // 2. Verificar frases completas para evitar falsos positivos
     for (const key in MENU_INTENTIONS) {
         const intention = MENU_INTENTIONS[key];
         if (intention.keywords.some(phrase => texto.includes(phrase))) {
@@ -291,7 +289,10 @@ async function buscarProductoPorTexto(texto) {
         'estoy', 'estas', 'esta', 'estaba', 'estabas', 'estabamos', 'estaban',
         'vengo', 'vienes', 'viene', 'vienen', 'venia', 'venias', 'veniamos', 'venian',
         'voy', 'vas', 'va', 'vamos', 'van', 'iba', 'ibas', 'ibamos', 'iban',
-        'llegando', 'pais', 'país', 'atento'
+        'llegando', 'pais', 'país', 'atento',
+        // PALABRAS IGNORADAS PARA NO DAÑAR BUSQUEDAS
+        'enviaras', 'existencia', 'existencias', 'enviar', 'enviame', 'mandame', 'mándame', 
+        'envíame', 'disponibilidad', 'ver', 'buscar', 'repuesto', 'repuestos', 'catalogo', 'catálogo'
     ];
 
     const palabrasBase = txtNormal.split(' ')
@@ -336,6 +337,9 @@ async function buscarProductoPorTexto(texto) {
     }
 
     let minRelevance = palabrasBase.length;
+    if (palabrasBase.length >= 4) {
+        minRelevance = palabrasBase.length - 1;
+    }
 
     const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
     const orConditions = expandedTerms.map(() => "descripcion LIKE ?");
@@ -485,17 +489,24 @@ async function checkFacturasVencidas() {
 // ===== RECORDATORIO A VENDEDORES =====
 let vendedorEjecutando = false;
 
-async function checkVendedoresRecordatorio() {
+async function checkVendedoresRecordatorio(force = false) {
     if (!isBotReady() || vendedorEjecutando) return;
     vendedorEjecutando = true;
     try {
         const hoy = new Date().getDay();
-        if (hoy === 0 || hoy === 6) return;
+        
+        if (!force && (hoy === 0 || hoy === 6)) {
+            vendedorEjecutando = false;
+            return;
+        }
 
         const ultimo = await notificador.obtenerUltimoEnvioVendedor();
-        if (ultimo) {
+        if (!force && ultimo) {
             const diff = Math.floor((new Date() - new Date(ultimo)) / 86400000);
-            if (diff < 3) return;
+            if (diff < 3) {
+                vendedorEjecutando = false;
+                return;
+            }
         }
 
         const facturas = await notificador.obtenerFacturasVencidasAll();
@@ -531,7 +542,9 @@ async function checkVendedoresRecordatorio() {
             await sleep(1000);
         }
 
-        await notificador.marcarEnvioVendedor();
+        if (!force) {
+            await notificador.marcarEnvioVendedor();
+        }
         console.log(`[VENDEDORES] ${Object.keys(vendedoresMap).length} vendedor(es) notificado(s).`);
     } catch (e) {
         console.log("[VENDEDORES] Error:", e.message);
@@ -540,26 +553,34 @@ async function checkVendedoresRecordatorio() {
     }
 }
 
-// ===== NUEVA FUNCION: ENVIO DE ESTADISTICAS A CADA VENDEDOR =====
+// ===== ENVIO DE ESTADISTICAS A CADA VENDEDOR =====
 let estadisticasEjecutando = false;
 
-async function checkEstadisticasVendedores() {
+async function checkEstadisticasVendedores(force = false) {
     if (!isBotReady() || estadisticasEjecutando) return;
     estadisticasEjecutando = true;
     try {
         const hoyDate = new Date();
         const hoyDay = hoyDate.getDay(); 
         
-        // 1 = Lunes, 5 = Viernes (Para pruebas de hoy)
-        if (hoyDay !== 1 && hoyDay !== 5) return;
+        // Ejecutar los lunes (1), o si el usuario lo dispara manualmente (force)
+        if (!force && hoyDay !== 1) {
+            estadisticasEjecutando = false;
+            return;
+        }
 
         const hoyStr = hoyDate.toISOString().split('T')[0];
         
-        // Evita enviar más de una vez en el mismo día
-        const [log] = await pool.execute("SELECT id FROM envio_estadisticas_log WHERE fecha_envio = ?", [hoyStr]);
-        if (log.length > 0) return;
+        // Validar no duplicar envios el mismo día (se omite la validación si se fuerza manual)
+        if (!force) {
+            const [log] = await pool.execute("SELECT id FROM envio_estadisticas_log WHERE fecha_envio = ?", [hoyStr]);
+            if (log.length > 0) {
+                estadisticasEjecutando = false;
+                return;
+            }
+        }
 
-        // Obtenemos los vendedores
+        // Consultamos la data del vendedor incluyendo su meta (activo o no)
         const [vendedores] = await pool.execute("SELECT id_vendedor, nombre, celular_vendedor, meta_ventas FROM tab_vendedores");
 
         for (const v of vendedores) {
@@ -567,26 +588,25 @@ async function checkEstadisticasVendedores() {
             const jid = formatWhatsApp(v.celular_vendedor);
             if (!jid) continue;
 
-            // 1. Venta de la última semana (últimos 7 días)
+            // 1. Venta última semana (7 días)
             const [rSemana] = await pool.execute(
                 "SELECT SUM(total) as total FROM tab_facturas WHERE id_vendedor = ? AND anulado = 'no' AND fecha_reg >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)",
                 [v.id_vendedor]
             );
             const ventaSemana = parseFloat(rSemana[0]?.total || 0);
 
-            // 2. Venta del mes en curso
+            // 2. Venta mes en curso
             const [rMes] = await pool.execute(
                 "SELECT SUM(total) as total FROM tab_facturas WHERE id_vendedor = ? AND anulado = 'no' AND fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')",
                 [v.id_vendedor]
             );
             const ventaMes = parseFloat(rMes[0]?.total || 0);
 
-            // 3. Porcentaje de la meta de ventas
+            // 3. Porcentaje de meta
             const meta = parseFloat(v.meta_ventas || 0);
             const porcMeta = meta > 0 ? ((ventaMes / meta) * 100).toFixed(2) : "0.00";
 
-            // 4. Porcentaje de ventas según el tipo de producto (Mes en curso)
-            // Vinculación segura considerando relaciones nro_factura e id_factura para evitar discrepancias
+            // 4. Porcentaje por tipo de producto (Mes en curso)
             const [rTipos] = await pool.execute(
                 `SELECT r.tipo, SUM(r.precio_total) as total_tipo 
                  FROM tab_facturas_reng r 
@@ -623,8 +643,10 @@ async function checkEstadisticasVendedores() {
             await sleep(2000);
         }
 
-        // Registrar envío exitoso del día
-        await pool.execute("INSERT INTO envio_estadisticas_log (fecha_envio) VALUES (?)", [hoyStr]);
+        if (!force) {
+            await pool.execute("INSERT INTO envio_estadisticas_log (fecha_envio) VALUES (?)", [hoyStr]);
+        }
+        
         console.log(`[ESTADISTICAS] Reportes individuales enviados correctamente.`);
     } catch (e) {
         console.log("[ESTADISTICAS] Error general:", e.message);
@@ -667,7 +689,8 @@ async function startBot() {
                 notificadorInterval = setInterval(checkNuevasFacturas, 45000);
                 setInterval(checkFacturasVencidas, 86400000);
                 setInterval(checkVendedoresRecordatorio, 86400000);
-                setInterval(checkEstadisticasVendedores, 1800000); // Revisa cada 30 min si corresponde enviar las estadísticas
+                setInterval(checkEstadisticasVendedores, 1800000);
+                
                 setInterval(() => {
                     if (!isBotReady() && socketBot) startBot();
                 }, 300000);
@@ -783,11 +806,10 @@ async function startBot() {
             }
 
             // --- 4. LÓGICA DE PRODUCTOS MEJORADA ---
-            if (text !== 'menu' && !['hola', 'buen dia', 'buonos dias'].includes(text)) {
+            if (text !== 'menu' && !['hola', 'buen dia', 'buenos dias'].includes(text)) {
                 try {
                     let prods = null;
                     
-                    // NUEVO: BUSCAR CÓDIGO DENTRO DE LA FRASE
                     const palabrasEnMensaje = rawText.split(/\s+/);
                     for (const p of palabrasEnMensaje) {
                         const codCandidato = p.replace(/[^a-zA-Z0-9]/g, ''); 
@@ -797,7 +819,6 @@ async function startBot() {
                         }
                     }
                     
-                    // Si no se encontró por código, buscar por texto (descripción)
                     if (!prods) {
                         prods = await buscarProductoPorTexto(rawText);
                     }
@@ -816,7 +837,6 @@ async function startBot() {
                             if (!isBotReady()) break; 
                             const precioLimpio = parseFloat(p.precio_final || 0).toFixed(2);
                             
-                            // Lógica de agotado (mejorada con stock_total)
                             let infoStock = "";
                             if (parseFloat(p.stock_total || 0) <= 0) {
                                 infoStock = "\n❌ *AGOTADO (Próximo a llegar)*";
@@ -869,7 +889,7 @@ async function startBot() {
     });
 }
 
-// (SERVIDOR HTTP Y RESTO DEL CÓDIGO IDENTICO...)
+// ===== SERVIDOR HTTP =====
 const server = http.createServer(async (req, res) => {
     const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const query = Object.fromEntries(parsedUrl.searchParams.entries());
@@ -945,8 +965,22 @@ const server = http.createServer(async (req, res) => {
             res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Sesión borrada</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><meta http-equiv="refresh" content="5;url=/"> </head><body class="bg-light"><div class="container mt-5 text-center"><div class="card shadow p-5 mx-auto" style="max-width:500px;border-radius:15px;"><h3>✅ Sesión borrada</h3><p class="mt-3">La carpeta <strong>auth_info</strong> se eliminó correctamente.</p><p>El bot mostrará un nuevo código QR en <strong>5 segundos</strong>.</p><a href="/" class="btn btn-primary mt-3">Ir al inicio</a></div></div></body></html>`);
         } catch (e) { res.end("Error al borrar sesión: " + e.message); }
     } else if (routename === '/notificador-estado') {
+        
+        // ACCIÓN DEL BOTÓN: Dispara AMBAS alertas forzadas solo por hoy
+        if (query.action === 'force_stats') {
+            if (isBotReady()) {
+                checkVendedoresRecordatorio(true);   // Envia listado de cuentas vencidas
+                checkEstadisticasVendedores(true);   // Envia reporte de estadísticas (ventas, tipos, meta)
+            }
+            res.writeHead(302, { 'Location': '/notificador-estado' });
+            return res.end();
+        }
+
         const total = await notificador.obtenerFacturasNoNotificadasCount();
-        res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><title>Notificador</title></head><body class="bg-light">${header}<div class="container mt-5"><div class="card shadow-lg p-4 mx-auto" style="max-width: 600px; border-radius: 15px;"><h3>📬 Notificador</h3><hr><p>Facturas pendientes: <strong>${total}</strong></p><p>Estado: ${isBotReady() ? '<span class="text-success">🟢 Online</span>' : '<span class="text-danger">🔴 Offline</span>'}</p><a href="/" class="btn btn-outline-secondary mt-3">Volver</a></div></div></body></html>`);
+        const ultimoEnvio = await notificador.obtenerUltimoEnvioVendedor().catch(() => null);
+        const fechaUltimo = ultimoEnvio ? new Date(ultimoEnvio).toISOString().split('T')[0] : 'Nunca';
+
+        res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><title>Notificador</title></head><body class="bg-light">${header}<div class="container mt-5"><div class="card shadow-lg p-4 mx-auto" style="max-width: 600px; border-radius: 15px;"><h3>📬 Notificador</h3><hr><p>Facturas pendientes por notificar a clientes: <strong>${total}</strong></p><p>Estado del Bot: ${isBotReady() ? '<span class="text-success">🟢 Online</span>' : '<span class="text-danger">🔴 Offline</span>'}</p><hr><h5>📊 Estadísticas / Resumen de Vendedores</h5><p>Último envío registrado: <strong>${fechaUltimo}</strong></p><p>Estatus para hoy: <span class="badge bg-warning text-dark">Esperando acción (Programado para Lunes)</span></p><div class="d-grid gap-2"><a href="/notificador-estado?action=force_stats" class="btn btn-primary mt-2">🚀 Enviar Estadísticas a Vendedores Ahora (Solo por Hoy)</a><a href="/" class="btn btn-outline-secondary mt-1">Volver</a></div></div></div></body></html>`);
     } else if (routename === '/recordatorio-estado') {
         const facturas = await notificador.obtenerFacturasVencidas();
         const enviados = await notificador.obtenerRecordatoriosEnviados();
