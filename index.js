@@ -836,7 +836,7 @@ async function startBot() {
                 try {
                     let prods = null;
                     
-                    const palabras EnMensaje = rawText.split(/\s+/);
+                    const palabrasEnMensaje = rawText.split(/\s+/);
                     for (const p of palabrasEnMensaje) {
                         const codCandidato = p.replace(/[^a-zA-Z0-9]/g, ''); 
                         if (codCandidato.length >= 4) { 
