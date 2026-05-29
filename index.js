@@ -290,7 +290,6 @@ async function buscarProductoPorTexto(texto) {
         'vengo', 'vienes', 'viene', 'vienen', 'venia', 'venias', 'veniamos', 'venian',
         'voy', 'vas', 'va', 'vamos', 'van', 'iba', 'ibas', 'ibamos', 'iban',
         'llegando', 'pais', 'país', 'atento',
-        // PALABRAS IGNORADAS PARA NO DAÑAR BUSQUEDAS
         'enviaras', 'existencia', 'existencias', 'enviar', 'enviame', 'mandame', 'mándame', 
         'envíame', 'disponibilidad', 'ver', 'buscar', 'repuesto', 'repuestos', 'catalogo', 'catálogo'
     ];
@@ -486,7 +485,7 @@ async function checkFacturasVencidas() {
     }
 }
 
-// ===== RECORDATORIO A VENDEDORES =====
+// ===== RECORDATORIO A VENDEDORES (COBRANZAS) =====
 let vendedorEjecutando = false;
 
 async function checkVendedoresRecordatorio(force = false) {
@@ -539,13 +538,13 @@ async function checkVendedoresRecordatorio(force = false) {
             if (!v.jid || v.facturas.length === 0) continue;
             const msg = `📢 *RESUMEN DE CLIENTES VENCIDOS*\n\nVendedor: *${v.nombre}*\n\n${v.facturas.join('\n')}\n\nLe recordamos la importancia de gestionar estos cobros para mantener la rotación de productos.`;
             await safeSendMessage(v.jid, { text: msg });
-            await sleep(1000);
+            await sleep(1500);
         }
 
         if (!force) {
             await notificador.marcarEnvioVendedor();
         }
-        console.log(`[VENDEDORES] ${Object.keys(vendedoresMap).length} vendedor(es) notificado(s).`);
+        console.log(`[VENDEDORES] ${Object.keys(vendedoresMap).length} vendedor(es) notificado(s) por cobranzas.`);
     } catch (e) {
         console.log("[VENDEDORES] Error:", e.message);
     } finally {
@@ -580,7 +579,6 @@ async function checkEstadisticasVendedores(force = false) {
             }
         }
 
-        // Consultamos la data del vendedor incluyendo su meta (activo o no)
         const [vendedores] = await pool.execute("SELECT id_vendedor, nombre, celular_vendedor, meta_ventas FROM tab_vendedores");
 
         for (const v of vendedores) {
@@ -607,10 +605,11 @@ async function checkEstadisticasVendedores(force = false) {
             const porcMeta = meta > 0 ? ((ventaMes / meta) * 100).toFixed(2) : "0.00";
 
             // 4. Porcentaje por tipo de producto (Mes en curso)
+            // Se corrigió el JOIN para empatar tab_facturas.nro_factura con tab_facturas_reng.id_facturas
             const [rTipos] = await pool.execute(
                 `SELECT r.tipo, SUM(r.precio_total) as total_tipo 
                  FROM tab_facturas_reng r 
-                 JOIN tab_facturas f ON (r.id_factura = f.id_factura OR r.id_facturas = f.nro_factura)
+                 JOIN tab_facturas f ON f.nro_factura = r.id_facturas
                  WHERE f.id_vendedor = ? AND f.anulado = 'no' AND f.fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
                  GROUP BY r.tipo`,
                 [v.id_vendedor]
@@ -640,7 +639,7 @@ async function checkEstadisticasVendedores(force = false) {
                 `¡Excelente labor, sigamos sumando! 🚀`;
 
             await safeSendMessage(jid, { text: msgEstadisticas });
-            await sleep(2000);
+            await sleep(1500); // Pausa para evitar bloqueos del socket
         }
 
         if (!force) {
@@ -966,21 +965,52 @@ const server = http.createServer(async (req, res) => {
         } catch (e) { res.end("Error al borrar sesión: " + e.message); }
     } else if (routename === '/notificador-estado') {
         
-        // ACCIÓN DEL BOTÓN: Dispara AMBAS alertas forzadas solo por hoy
+        // ACCIONES INDEPENDIENTES PARA CADA BOTÓN
+        if (query.action === 'force_cobranza') {
+            if (isBotReady()) {
+                checkVendedoresRecordatorio(true).catch(e => console.log(e));
+            }
+            res.writeHead(302, { 'Location': '/notificador-estado' });
+            return res.end();
+        }
+
         if (query.action === 'force_stats') {
             if (isBotReady()) {
-                checkVendedoresRecordatorio(true);   // Envia listado de cuentas vencidas
-                checkEstadisticasVendedores(true);   // Envia reporte de estadísticas (ventas, tipos, meta)
+                checkEstadisticasVendedores(true).catch(e => console.log(e));
             }
             res.writeHead(302, { 'Location': '/notificador-estado' });
             return res.end();
         }
 
         const total = await notificador.obtenerFacturasNoNotificadasCount();
-        const ultimoEnvio = await notificador.obtenerUltimoEnvioVendedor().catch(() => null);
-        const fechaUltimo = ultimoEnvio ? new Date(ultimoEnvio).toISOString().split('T')[0] : 'Nunca';
 
-        res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><title>Notificador</title></head><body class="bg-light">${header}<div class="container mt-5"><div class="card shadow-lg p-4 mx-auto" style="max-width: 600px; border-radius: 15px;"><h3>📬 Notificador</h3><hr><p>Facturas pendientes por notificar a clientes: <strong>${total}</strong></p><p>Estado del Bot: ${isBotReady() ? '<span class="text-success">🟢 Online</span>' : '<span class="text-danger">🔴 Offline</span>'}</p><hr><h5>📊 Estadísticas / Resumen de Vendedores</h5><p>Último envío registrado: <strong>${fechaUltimo}</strong></p><p>Estatus para hoy: <span class="badge bg-warning text-dark">Esperando acción (Programado para Lunes)</span></p><div class="d-grid gap-2"><a href="/notificador-estado?action=force_stats" class="btn btn-primary mt-2">🚀 Enviar Estadísticas a Vendedores Ahora (Solo por Hoy)</a><a href="/" class="btn btn-outline-secondary mt-1">Volver</a></div></div></div></body></html>`);
+        res.end(`<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+            <title>Notificador</title>
+        </head>
+        <body class="bg-light">
+            ${header}
+            <div class="container mt-5">
+                <div class="card shadow-lg p-4 mx-auto" style="max-width: 600px; border-radius: 15px;">
+                    <h3>📬 Notificador</h3>
+                    <hr>
+                    <p>Facturas pendientes por notificar a clientes: <strong>${total}</strong></p>
+                    <p>Estado del Bot: ${isBotReady() ? '<span class="text-success">🟢 Online</span>' : '<span class="text-danger">🔴 Offline</span>'}</p>
+                    <hr>
+                    <h5>📊 Control Manual de Vendedores</h5>
+                    <p class="text-muted small">Selecciona la notificación que deseas enviar en este momento (Saltará restricciones de fecha).</p>
+                    <div class="d-grid gap-2 mt-3">
+                        <a href="/notificador-estado?action=force_cobranza" class="btn btn-warning text-dark">⚠️ Forzar Notificación de Cuentas por Cobrar</a>
+                        <a href="/notificador-estado?action=force_stats" class="btn btn-primary">📊 Forzar Envío de Estadísticas de Ventas</a>
+                        <a href="/" class="btn btn-outline-secondary mt-2">Volver al Menú Principal</a>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>`);
     } else if (routename === '/recordatorio-estado') {
         const facturas = await notificador.obtenerFacturasVencidas();
         const enviados = await notificador.obtenerRecordatoriosEnviados();
