@@ -556,22 +556,29 @@ async function checkVendedoresRecordatorio(force = false) {
 let estadisticasEjecutando = false;
 
 async function checkEstadisticasVendedores(force = false) {
-    if (!isBotReady() || estadisticasEjecutando) return;
+    if (!isBotReady()) {
+        console.log("[ESTADISTICAS] Bot no está listo para enviar estadísticas.");
+        return;
+    }
+    // AQUÍ ESTÁ EL FIX: Si se fuerza, ignoramos completamente si está bloqueado
+    if (estadisticasEjecutando && !force) {
+        console.log("[ESTADISTICAS] Omitido porque ya se encuentra en ejecución.");
+        return;
+    }
+    
     estadisticasEjecutando = true;
+    console.log(`[ESTADISTICAS] Iniciando proceso de envío (Force manual: ${force})...`);
+
     try {
         const hoyDate = new Date();
         const hoyDay = hoyDate.getDay(); 
-        
-        // Ejecutar automático los lunes (1), saltar la validación si se fuerza manualmente (force === true)
-        if (!force && hoyDay !== 1) {
-            estadisticasEjecutando = false;
-            return;
-        }
-
         const hoyStr = hoyDate.toISOString().split('T')[0];
         
-        // Validar no duplicar envios el mismo día (se omite la validación si se fuerza manual)
         if (!force) {
+            if (hoyDay !== 1) {
+                estadisticasEjecutando = false;
+                return;
+            }
             const [log] = await pool.execute("SELECT id FROM envio_estadisticas_log WHERE fecha_envio = ?", [hoyStr]);
             if (log.length > 0) {
                 estadisticasEjecutando = false;
@@ -586,70 +593,111 @@ async function checkEstadisticasVendedores(force = false) {
             const jid = formatWhatsApp(v.celular_vendedor);
             if (!jid) continue;
 
-            // 1. Venta última semana (7 días)
-            const [rSemana] = await pool.execute(
-                "SELECT SUM(total) as total FROM tab_facturas WHERE id_vendedor = ? AND anulado = 'no' AND fecha_reg >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)",
-                [v.id_vendedor]
-            );
-            const ventaSemana = parseFloat(rSemana[0]?.total || 0);
-
-            // 2. Venta mes en curso
-            const [rMes] = await pool.execute(
-                "SELECT SUM(total) as total FROM tab_facturas WHERE id_vendedor = ? AND anulado = 'no' AND fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')",
-                [v.id_vendedor]
-            );
-            const ventaMes = parseFloat(rMes[0]?.total || 0);
-
-            // 3. Porcentaje de meta
+            let ventaSemana = 0;
+            let ventaMes = 0;
+            let porcMeta = "0.00";
             const meta = parseFloat(v.meta_ventas || 0);
-            const porcMeta = meta > 0 ? ((ventaMes / meta) * 100).toFixed(2) : "0.00";
+
+            try {
+                // 1. Venta última semana (7 días)
+                const [rSemana] = await pool.execute(
+                    "SELECT SUM(total) as total FROM tab_facturas WHERE id_vendedor = ? AND anulado = 'no' AND fecha_reg >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)",
+                    [v.id_vendedor]
+                );
+                ventaSemana = parseFloat(rSemana[0]?.total || 0);
+
+                // 2. Venta mes en curso
+                const [rMes] = await pool.execute(
+                    "SELECT SUM(total) as total FROM tab_facturas WHERE id_vendedor = ? AND anulado = 'no' AND fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')",
+                    [v.id_vendedor]
+                );
+                ventaMes = parseFloat(rMes[0]?.total || 0);
+
+                // 3. Porcentaje de meta
+                porcMeta = meta > 0 ? ((ventaMes / meta) * 100).toFixed(2) : "0.00";
+            } catch (errDB) {
+                console.log(`[ESTADISTICAS] Error calculando totales para ${v.nombre}: ${errDB.message}`);
+            }
 
             // 4. Porcentaje por tipo de producto (Mes en curso)
-            const [rTipos] = await pool.execute(
-                `SELECT r.tipo, SUM(r.precio_total) as total_tipo 
-                 FROM tab_facturas_reng r 
-                 JOIN tab_facturas f ON f.nro_factura = r.id_facturas
-                 WHERE f.id_vendedor = ? AND f.anulado = 'no' AND f.fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
-                 GROUP BY r.tipo`,
-                [v.id_vendedor]
-            );
-
-            let totalItemsMes = 0;
-            rTipos.forEach(row => { totalItemsMes += parseFloat(row.total_tipo || 0); });
-
             let breakdownTexto = "";
-            if (rTipos.length === 0) {
-                breakdownTexto = "🔸 _Sin renglones registrados este mes._\n";
-            } else {
-                rTipos.forEach(row => {
-                    const tTotal = parseFloat(row.total_tipo || 0);
-                    const pct = totalItemsMes > 0 ? ((tTotal / totalItemsMes) * 100).toFixed(2) : "0.00";
-                    breakdownTexto += `🔸 *${row.tipo || 'General'}:* ${pct}% _($${tTotal.toFixed(2)})_\n`;
-                });
+            try {
+                const [rTipos] = await pool.execute(
+                    `SELECT r.tipo, SUM(r.precio_total) as total_tipo 
+                     FROM tab_facturas_reng r 
+                     JOIN tab_facturas f ON f.nro_factura = r.id_factura
+                     WHERE f.id_vendedor = ? AND f.anulado = 'no' AND f.fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+                     GROUP BY r.tipo`,
+                    [v.id_vendedor]
+                );
+
+                let totalItemsMes = 0;
+                rTipos.forEach(row => { totalItemsMes += parseFloat(row.total_tipo || 0); });
+
+                if (rTipos.length === 0) {
+                    breakdownTexto = "🔸 _Sin renglones registrados este mes._\n";
+                } else {
+                    rTipos.forEach(row => {
+                        const tTotal = parseFloat(row.total_tipo || 0);
+                        const pct = totalItemsMes > 0 ? ((tTotal / totalItemsMes) * 100).toFixed(2) : "0.00";
+                        breakdownTexto += `🔸 *${row.tipo || 'General'}:* ${pct}% _($${tTotal.toFixed(2)})_\n`;
+                    });
+                }
+            } catch (errTipos) {
+                try {
+                    const [rTipos2] = await pool.execute(
+                        `SELECT r.tipo, SUM(r.precio_total) as total_tipo 
+                         FROM tab_facturas_reng r 
+                         JOIN tab_facturas f ON f.nro_factura = r.id_facturas
+                         WHERE f.id_vendedor = ? AND f.anulado = 'no' AND f.fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+                         GROUP BY r.tipo`,
+                        [v.id_vendedor]
+                    );
+
+                    let totalItemsMes2 = 0;
+                    rTipos2.forEach(row => { totalItemsMes2 += parseFloat(row.total_tipo || 0); });
+
+                    if (rTipos2.length === 0) {
+                        breakdownTexto = "🔸 _Sin renglones registrados este mes._\n";
+                    } else {
+                        rTipos2.forEach(row => {
+                            const tTotal = parseFloat(row.total_tipo || 0);
+                            const pct = totalItemsMes2 > 0 ? ((tTotal / totalItemsMes2) * 100).toFixed(2) : "0.00";
+                            breakdownTexto += `🔸 *${row.tipo || 'General'}:* ${pct}% _($${tTotal.toFixed(2)})_\n`;
+                        });
+                    }
+                } catch (e2) {
+                    console.log(`[ESTADISTICAS] Error desglose productos para ${v.nombre}`);
+                    breakdownTexto = "🔸 _Desglose no disponible._\n";
+                }
             }
 
             // 5. TOP MEJORES CLIENTES DEL VENDEDOR (Mes en curso)
-            const [rClientes] = await pool.execute(
-                `SELECT c.nombres, SUM(f.total) as total_cliente 
-                 FROM tab_facturas f 
-                 JOIN tab_clientes c ON f.id_cliente = c.id_cliente
-                 WHERE f.id_vendedor = ? AND f.anulado = 'no' AND f.fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
-                 GROUP BY f.id_cliente, c.nombres 
-                 ORDER BY total_cliente DESC 
-                 LIMIT 3`,
-                [v.id_vendedor]
-            );
-
             let clientesTexto = "";
-            if (rClientes.length === 0) {
-                clientesTexto = "🔹 _Sin transacciones registradas este mes._\n";
-            } else {
-                rClientes.forEach((row, index) => {
-                    clientesTexto += `👑 *${index + 1}. ${row.nombres.trim()}:* $${parseFloat(row.total_cliente).toFixed(2)}\n`;
-                });
+            try {
+                const [rClientes] = await pool.execute(
+                    `SELECT c.nombres, SUM(f.total) as total_cliente 
+                     FROM tab_facturas f 
+                     JOIN tab_clientes c ON f.id_cliente = c.id_cliente
+                     WHERE f.id_vendedor = ? AND f.anulado = 'no' AND f.fecha_reg >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+                     GROUP BY f.id_cliente, c.nombres 
+                     ORDER BY total_cliente DESC 
+                     LIMIT 3`,
+                    [v.id_vendedor]
+                );
+
+                if (rClientes.length === 0) {
+                    clientesTexto = "🔹 _Sin transacciones registradas este mes._\n";
+                } else {
+                    rClientes.forEach((row, index) => {
+                        clientesTexto += `👑 *${index + 1}. ${row.nombres.trim()}:* $${parseFloat(row.total_cliente).toFixed(2)}\n`;
+                    });
+                }
+            } catch (errClientes) {
+                console.log(`[ESTADISTICAS] Error Top Clientes para ${v.nombre}`);
+                clientesTexto = "🔹 _Top clientes no disponible._\n";
             }
 
-            // Mensaje de motivación enfocado en transformar visitas en ventas reales
             const mensajeMotivacional = `💡 *REFLEXIÓN DE ÉXITO SEMANAL:*\nRecuerda que las únicas limitaciones verdaderas son las que tú permites que vivan en tu mente. No existen mercados difíciles ni metas inalcanzables cuando vas con determinación. Esta semana, haz que cada visita cuente: no salgas solo a saludar, sal con la convicción de conectar y transformar cada oportunidad en una venta cerrada. ¡Rompe tus propios récords y demuestra tu verdadero potencial! 💪🚀`;
 
             const msgEstadisticas = `📊 *REPORTE DE ESTADÍSTICAS DE VENTAS*\n\n` +
@@ -663,10 +711,9 @@ async function checkEstadisticasVendedores(force = false) {
                 `${mensajeMotivacional}`;
 
             await safeSendMessage(jid, { text: msgEstadisticas });
-            await sleep(1500); // Pausa para evitar bloqueos del socket
+            await sleep(1500); 
         }
 
-        // Si es automático, registramos el envío para que no se repita en el día
         if (!force) {
             await pool.execute("INSERT INTO envio_estadisticas_log (fecha_envio) VALUES (?)", [hoyStr]);
         }
@@ -992,7 +1039,6 @@ const server = http.createServer(async (req, res) => {
         } catch (e) { res.end("Error al borrar sesión: " + e.message); }
     } else if (routename === '/notificador-estado') {
         
-        // ACCIONES INDEPENDIENTES PARA CADA BOTÓN
         if (query.action === 'force_cobranza') {
             if (isBotReady()) {
                 checkVendedoresRecordatorio(true).catch(e => console.log(e));
@@ -1003,7 +1049,8 @@ const server = http.createServer(async (req, res) => {
 
         if (query.action === 'force_stats') {
             if (isBotReady()) {
-                // AQUÍ PASAMOS TRUE PARA FORZAR EL ENVÍO INMEDIATO
+                // DESTRABAR MANUALMENTE LA VARIABLE PARA QUE ENTRE SÍ O SÍ
+                estadisticasEjecutando = false; 
                 checkEstadisticasVendedores(true).catch(e => console.log(e));
             }
             res.writeHead(302, { 'Location': '/notificador-estado' });
