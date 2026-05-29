@@ -552,33 +552,13 @@ async function checkVendedoresRecordatorio(force = false) {
     }
 }
 
-// ===== ENVIO DE ESTADISTICAS A CADA VENDEDOR =====
+// ===== ENVIO DE ESTADISTICAS A CADA VENDEDOR (AHORA SOLO MANUAL) =====
 let estadisticasEjecutando = false;
 
-async function checkEstadisticasVendedores(force = false) {
+async function checkEstadisticasVendedores() {
     if (!isBotReady() || estadisticasEjecutando) return;
     estadisticasEjecutando = true;
     try {
-        const hoyDate = new Date();
-        const hoyDay = hoyDate.getDay(); 
-        
-        // Ejecutar los lunes (1), o si el usuario lo dispara manualmente (force)
-        if (!force && hoyDay !== 1) {
-            estadisticasEjecutando = false;
-            return;
-        }
-
-        const hoyStr = hoyDate.toISOString().split('T')[0];
-        
-        // Validar no duplicar envios el mismo día (se omite la validación si se fuerza manual)
-        if (!force) {
-            const [log] = await pool.execute("SELECT id FROM envio_estadisticas_log WHERE fecha_envio = ?", [hoyStr]);
-            if (log.length > 0) {
-                estadisticasEjecutando = false;
-                return;
-            }
-        }
-
         const [vendedores] = await pool.execute("SELECT id_vendedor, nombre, celular_vendedor, meta_ventas FROM tab_vendedores");
 
         for (const v of vendedores) {
@@ -649,7 +629,7 @@ async function checkEstadisticasVendedores(force = false) {
                 });
             }
 
-            // Mensaje de motivación enfocado en transformar visitas en ventas reales
+            // Mensaje de motivación
             const mensajeMotivacional = `💡 *REFLEXIÓN DE ÉXITO SEMANAL:*\nRecuerda que las únicas limitaciones verdaderas son las que tú permites que vivan en tu mente. No existen mercados difíciles ni metas inalcanzables cuando vas con determinación. Esta semana, haz que cada visita cuente: no salgas solo a saludar, sal con la convicción de conectar y transformar cada oportunidad en una venta cerrada. ¡Rompe tus propios récords y demuestra tu verdadero potencial! 💪🚀`;
 
             const msgEstadisticas = `📊 *REPORTE DE ESTADÍSTICAS DE VENTAS*\n\n` +
@@ -666,11 +646,7 @@ async function checkEstadisticasVendedores(force = false) {
             await sleep(1500); // Pausa para evitar bloqueos del socket
         }
 
-        if (!force) {
-            await pool.execute("INSERT INTO envio_estadisticas_log (fecha_envio) VALUES (?)", [hoyStr]);
-        }
-        
-        console.log(`[ESTADISTICAS] Reportes individuales enviados correctamente.`);
+        console.log(`[ESTADISTICAS] Reportes individuales enviados correctamente (MODO MANUAL).`);
     } catch (e) {
         console.log("[ESTADISTICAS] Error general:", e.message);
     } finally {
@@ -712,7 +688,7 @@ async function startBot() {
                 notificadorInterval = setInterval(checkNuevasFacturas, 45000);
                 setInterval(checkFacturasVencidas, 86400000);
                 setInterval(checkVendedoresRecordatorio, 86400000);
-                setInterval(checkEstadisticasVendedores, 1800000);
+                // Se removió el setInterval de checkEstadisticasVendedores
                 
                 setInterval(() => {
                     if (!isBotReady() && socketBot) startBot();
@@ -797,7 +773,7 @@ async function startBot() {
                 if (menuOption.includes('Estado de cuenta')) {
                     const targetID = sesion?.id_cliente_int;
                     if (!targetID) {
-                        return await safeSendMessage(from, { text: "Para consulting su estado de cuenta, por favor envíe su *RIF* para identificarlo." });
+                        return await safeSendMessage(from, { text: "Para consultar su estado de cuenta, por favor envíe su *RIF* para identificarlo." });
                     }
                     const facturas = await obtenerDetalleFacturas(targetID);
                     if (facturas.length === 0) return await safeSendMessage(from, { text: "✅ No posee facturas pendientes." });
@@ -1000,7 +976,8 @@ const server = http.createServer(async (req, res) => {
 
         if (query.action === 'force_stats') {
             if (isBotReady()) {
-                checkEstadisticasVendedores(true).catch(e => console.log(e));
+                // Al presionar el botón se llama a la función de estadísticas para que envíe inmediatamente
+                checkEstadisticasVendedores().catch(e => console.log(e));
             }
             res.writeHead(302, { 'Location': '/notificador-estado' });
             return res.end();
