@@ -931,12 +931,13 @@ async function startBot() {
             if (itemsPedido.length >= 2) {
                 let header = `📋 *COTIZACIÓN*\n`;
                 if (vendedor) header += `👤 Vendedor: *${vendedor.nombre}*\n`;
-                header += `━━━━━━━━━━━━━━━━━━\n`;
-                header += `│ Código │ Descripción │ Cant. │ Precio │ Total │\n`;
-                header += `━━━━━━━━━━━━━━━━━━\n`;
+                header += `┌──────────┬────────────────────────────────┬──────┬────────┬────────┐\n`;
+                header += `│ Código   │ Descripción                    │ Cant │ Precio │ Total  │\n`;
+                header += `├──────────┼────────────────────────────────┼──────┼────────┼────────┤\n`;
                 let cuerpo = '';
                 let granTotal = 0;
                 let errores = [];
+                let idx = 0;
                 for (const item of itemsPedido) {
                     const prods = await buscarProductoPorCodigo(item.codigo);
                     if (!prods || prods.length === 0) {
@@ -952,13 +953,19 @@ async function startBot() {
                     const precio = parseFloat(p.precio_final || 0);
                     const total = precio * item.cantidad;
                     granTotal += total;
-                    cuerpo += `│ ${p.producto} │ ${p.descripcion.substring(0, 30)} │ ${item.cantidad} │ $${precio.toFixed(2)} │ $${total.toFixed(2)} │\n`;
+                    const cod = p.producto.padEnd(8);
+                    const desc = p.descripcion.substring(0, 30).padEnd(30);
+                    const cant = item.cantidad.toString().padStart(4);
+                    const prec = `$${precio.toFixed(2)}`.padStart(6);
+                    const tot = `$${total.toFixed(2)}`.padStart(6);
+                    cuerpo += `│ ${cod} │ ${desc} │ ${cant} │ ${prec} │ ${tot} │\n`;
+                    idx++;
                 }
                 if (cuerpo) {
                     header += cuerpo;
-                    header += `━━━━━━━━━━━━━━━━━━\n`;
-                    header += `│ *TOTAL GENERAL:* │ *$${granTotal.toFixed(2)}* │\n`;
-                    header += `━━━━━━━━━━━━━━━━━━\n`;
+                    header += `├──────────┼────────────────────────────────┼──────┼────────┼────────┤\n`;
+                    header += `│          │ *TOTAL GENERAL*               │      │        │ *$${granTotal.toFixed(2).padStart(6)}* │\n`;
+                    header += `└──────────┴────────────────────────────────┴──────┴────────┴────────┘\n`;
                 }
                 if (errores.length > 0) {
                     header += `\n⚠️ *Productos con problemas:*\n${errores.join('\n')}\n`;
