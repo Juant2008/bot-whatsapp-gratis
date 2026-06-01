@@ -267,7 +267,7 @@ async function buscarProductoPorTexto(texto) {
     textoBuscado = textoBuscado.replace(/GRANCHEROKEE|GRANDCHEROKEE/gi, "GRAND CHEROKEE");
     textoBuscado = textoBuscado.replace(/GRANBLAZER|GRANDVLAZER/gi, "GRAND BLAZER");
     textoBuscado = textoBuscado.replace(/GRANVITARA|GRANDVITARA/gi, "GRAND VITARA");
-    
+        textoBuscado = textoBuscado.replace(/SUPERCARRY|SUPERCARRY/gi, "SUPER CARRY");
     const txtNormal = normalizar(textoBuscado);
     // ====================================================
 
