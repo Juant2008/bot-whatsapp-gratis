@@ -920,7 +920,54 @@ async function startBot() {
                 return await safeSendMessage(from, { text: saludoCordial });
             }
 
-            // --- 4. LÓGICA DE PRODUCTOS MEJORADA ---
+            // --- 4. COTIZACIÓN AUTOMÁTICA (MULTILÍNEA) ---
+            const lineas = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            const itemsPedido = [];
+            const regexLinea = /^\s*([A-Za-z0-9]{4,})\s*-?\s*(\d+)\s*$/;
+            for (const linea of lineas) {
+                const match = linea.match(regexLinea);
+                if (match) itemsPedido.push({ codigo: match[1].toUpperCase(), cantidad: parseInt(match[2]) });
+            }
+            if (itemsPedido.length >= 2) {
+                let header = `📋 *COTIZACIÓN*\n`;
+                if (vendedor) header += `👤 Vendedor: *${vendedor.nombre}*\n`;
+                header += `━━━━━━━━━━━━━━━━━━\n`;
+                header += `│ Código │ Descripción │ Cant. │ Precio │ Total │\n`;
+                header += `━━━━━━━━━━━━━━━━━━\n`;
+                let cuerpo = '';
+                let granTotal = 0;
+                let errores = [];
+                for (const item of itemsPedido) {
+                    const prods = await buscarProductoPorCodigo(item.codigo);
+                    if (!prods || prods.length === 0) {
+                        errores.push(`❌ *${item.codigo}*: Código no encontrado`);
+                        continue;
+                    }
+                    const p = prods[0];
+                    const stock = parseFloat(p.stock_total || 0);
+                    if (stock <= 0) {
+                        errores.push(`❌ *${p.producto}*: Sin stock disponible`);
+                        continue;
+                    }
+                    const precio = parseFloat(p.precio_final || 0);
+                    const total = precio * item.cantidad;
+                    granTotal += total;
+                    cuerpo += `│ ${p.producto} │ ${p.descripcion.substring(0, 30)} │ ${item.cantidad} │ $${precio.toFixed(2)} │ $${total.toFixed(2)} │\n`;
+                }
+                if (cuerpo) {
+                    header += cuerpo;
+                    header += `━━━━━━━━━━━━━━━━━━\n`;
+                    header += `│ *TOTAL GENERAL:* │ *$${granTotal.toFixed(2)}* │\n`;
+                    header += `━━━━━━━━━━━━━━━━━━\n`;
+                }
+                if (errores.length > 0) {
+                    header += `\n⚠️ *Productos con problemas:*\n${errores.join('\n')}\n`;
+                }
+                header += `\n_Genere el pedido aquí:_ https://www.one4cars.com/tomar_pedido.php/`;
+                return await safeSendMessage(from, { text: header });
+            }
+
+            // --- 5. LÓGICA DE PRODUCTOS MEJORADA ---
             if (text !== 'menu' && !['hola', 'buen dia', 'buenos dias'].includes(text)) {
                 try {
                     let prods = null;
@@ -973,7 +1020,7 @@ async function startBot() {
                 } catch (e) { console.log("Error en flujo de productos:", e); }
             }
 
-            // --- 5. COMANDOS DE ADMINISTRADOR ---
+            // --- 6. COMANDOS DE ADMINISTRADOR ---
             if (isAdmin) {
                 const notaMatch = text.match(/nota\s+(\d+)/);
                 if (notaMatch) {
@@ -988,7 +1035,7 @@ async function startBot() {
                 }
             }
 
-            // --- 6. SALUDO Y MENÚ ---
+            // --- 7. SALUDO Y MENÚ ---
             const nombreUsuario = vendedor ? vendedor.nombre : pushName;
             const diaWords = ['buen dia', 'buenos dias', 'buendia', 'buenosdias'];
             const tardeWords = ['buenas tardes', 'buenastardes'];
@@ -1006,7 +1053,7 @@ async function startBot() {
                 return await safeSendMessage(from, { text: `¡Buenas noches, *${nombreUsuario}*! Dios le bendiga. Que descanse. 🌙\n\n¿En qué podemos ayudarle? Quedamos a la orden.\n\n${MENU_TEXT}` });
             }
             
-            // --- 7. AGRADECIMIENTO ---
+            // --- 8. AGRADECIMIENTO ---
             const gratitudeWords = ['gracias', 'agradecid', 'agardecid', 'agradecimient'];
             if (gratitudeWords.some(w => text.includes(w))) {
                 const nombreUsuario = vendedor ? vendedor.nombre : pushName;
@@ -1021,7 +1068,7 @@ async function startBot() {
                 return await safeSendMessage(from, { text: respuesta });
             }
 
-            // --- 8. FALLBACK ---
+            // --- 9. FALLBACK ---
             const conversationalShorts = ['si', 'no', 'ok', 'vale', 'ya', 'entendido', 'bueno', 'dale', 'claro'];
             if (conversationalShorts.includes(text)) return; 
             if (rawText.length > 500) return;
