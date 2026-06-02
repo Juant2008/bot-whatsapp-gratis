@@ -426,13 +426,17 @@ async function checkNuevasFacturas() {
             const jid = formatWhatsApp(f.celular);
             if (!jid) continue;
             const fecha = new Date(f.fecha_reg).toISOString().split('T')[0];
-            const msg = `🧾 *NUEVA FACTURA REGISTRADA*\n\nHola *${f.nombres}*, se ha registrado una nueva factura en nuestro sistema:\n\n🔹 *N°:* ${f.nro_factura}\n🔹 *Monto:* $${parseFloat(f.total).toFixed(2)}\n🔹 *Fecha:* ${fecha}\n\nPuede consultar su estado de cuenta en:\nhttps://www.one4cars.com/estado_de_cuenta.php/`;
+            let montoNotif = parseFloat(f.total);
+            if (f.vendedor_nombre && f.vendedor_nombre.toUpperCase() === 'MANUEL FERRAZ') {
+                montoNotif = montoNotif / 0.80 / (parseFloat(f.porcentaje) || 1);
+            }
+            const msg = `🧾 *NUEVA FACTURA REGISTRADA*\n\nHola *${f.nombres}*, se ha registrado una nueva factura en nuestro sistema:\n\n🔹 *N°:* ${f.nro_factura}\n🔹 *Monto:* $${montoNotif.toFixed(2)}\n🔹 *Fecha:* ${fecha}\n\nPuede consultar su estado de cuenta en:\nhttps://www.one4cars.com/estado_de_cuenta.php/`;
             await safeSendMessage(jid, { text: msg });
 
             if (f.celular_vendedor) {
                 const jidV = formatWhatsApp(f.celular_vendedor);
                 if (jidV) {
-                    const msgV = `📢 *NUEVA FACTURA DE SU CLIENTE*\n\nVendedor: *${f.vendedor_nombre || 'N/A'}*\nCliente: *${f.nombres}*\n\n🔹 *N° Factura:* ${f.nro_factura}\n🔹 *Monto:* $${parseFloat(f.total).toFixed(2)}\n🔹 *Fecha:* ${fecha}`;
+                    const msgV = `📢 *NUEVA FACTURA DE SU CLIENTE*\n\nVendedor: *${f.vendedor_nombre || 'N/A'}*\nCliente: *${f.nombres}*\n\n🔹 *N° Factura:* ${f.nro_factura}\n🔹 *Monto:* $${montoNotif.toFixed(2)}\n🔹 *Fecha:* ${fecha}`;
                     await safeSendMessage(jidV, { text: msgV });
                 }
             }
