@@ -328,14 +328,14 @@ async function buscarProductoPorTexto(texto) {
 
     const expandirFormas = (pal) => {
         const f = [pal];
-        if (pal.endsWith('es') && pal.length >= 3) f.push(pal.slice(0, -2));
+        if (pal.endsWith('es') && pal.length > 4) f.push(pal.slice(0, -2));
         if (pal.endsWith('s') && pal.length > 3 && !pal.endsWith('es')) f.push(pal.slice(0, -1));
         if (!pal.endsWith('s')) {
             f.push(pal + 's');
             if (pal.endsWith('z')) f.push(pal.slice(0, -1) + 'ces');
         }
-        if (pal.endsWith('a') && pal.length >= 3) f.push(pal.slice(0, -1) + 'o');
-        if (pal.endsWith('o') && pal.length >= 3) f.push(pal.slice(0, -1) + 'a');
+        if (pal.endsWith('a') && pal.length > 4) f.push(pal.slice(0, -1) + 'o');
+        if (pal.endsWith('o') && pal.length > 4) f.push(pal.slice(0, -1) + 'a');
         return [...new Set(f)];
     };
     
@@ -952,12 +952,12 @@ async function startBot() {
             const lineas = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
             const itemsPedido = [];
             for (const linea of lineas) {
-                let match = linea.match(/^\s*([A-Za-z0-9]{4,})\s*[-=]?\s*(\d{1,4})\s*$/);
+                let match = linea.match(/^\s*([A-Za-z0-9]{3,})\s*[-=]?\s*(\d{1,4})\s*$/);
                 if (match) {
                     itemsPedido.push({ codigo: match[1].toUpperCase(), cantidad: parseInt(match[2]) });
                     continue;
                 }
-                match = linea.match(/^\s*(\d{1,4})\s*[-=]?\s*([A-Za-z0-9]{4,})\s*$/);
+                match = linea.match(/^\s*(\d{1,4})\s*[-=]?\s*([A-Za-z0-9]{3,})\s*$/);
                 if (match) {
                     itemsPedido.push({ codigo: match[2].toUpperCase(), cantidad: parseInt(match[1]) });
                 }
@@ -965,9 +965,9 @@ async function startBot() {
             if (itemsPedido.length >= 2) {
                 let header = `📋 *COTIZACIÓN*\n`;
                 if (vendedor) header += `👤 Vendedor: *${vendedor.nombre}*\n`;
-                header += `┌──────────┬────────────────────────────────┬──────┬────────┬────────┐\n`;
-                header += `│ Código   │ Descripción                    │ Cant │ Precio │ Total  │\n`;
-                header += `├──────────┼────────────────────────────────┼──────┼────────┼────────┤\n`;
+                header += `┌──────────┬──────────────────────┬──────┬────────┬────────┐\n`;
+                header += `│ Código   │ Tipo                  │ Cant │ Precio │ Total  │\n`;
+                header += `├──────────┼──────────────────────┼──────┼────────┼────────┤\n`;
                 let cuerpo = '';
                 let granTotal = 0;
                 let errores = [];
@@ -981,28 +981,28 @@ async function startBot() {
                     const p = prods[0];
                     const stock = parseFloat(p.stock_total || 0);
                     if (stock <= 0) {
-                        errores.push(`❌ *${p.producto}*: Sin stock disponible`);
+                        errores.push(`❌ *${p.producto}*: Sin stock`);
                         continue;
                     }
                     const precio = parseFloat(p.precio_final || 0);
                     const total = precio * item.cantidad;
                     granTotal += total;
                     const cod = p.producto.padEnd(8);
-                    const desc = p.descripcion.substring(0, 30).padEnd(30);
+                    const tipo = (p.tipo || '').substring(0, 20).padEnd(20);
                     const cant = item.cantidad.toString().padStart(4);
                     const prec = `$${precio.toFixed(2)}`.padStart(6);
                     const tot = `$${total.toFixed(2)}`.padStart(6);
-                    cuerpo += `│ ${cod} │ ${desc} │ ${cant} │ ${prec} │ ${tot} │\n`;
+                    cuerpo += `│ ${cod} │ ${tipo} │ ${cant} │ ${prec} │ ${tot} │\n`;
                     idx++;
                 }
                 if (cuerpo) {
                     header += cuerpo;
-                    header += `├──────────┼────────────────────────────────┼──────┼────────┼────────┤\n`;
-                    header += `│          │ *TOTAL GENERAL*               │      │        │ *$${granTotal.toFixed(2).padStart(6)}* │\n`;
-                    header += `└──────────┴────────────────────────────────┴──────┴────────┴────────┘\n`;
+                    header += `├──────────┼──────────────────────┼──────┼────────┼────────┤\n`;
+                    header += `│          │ TOTAL GENERAL         │      │        │ ${`$${granTotal.toFixed(2)}`.padStart(6)} │\n`;
+                    header += `└──────────┴──────────────────────┴──────┴────────┴────────┘\n`;
                 }
                 if (errores.length > 0) {
-                    header += `\n⚠️ *Productos con problemas:*\n${errores.join('\n')}\n`;
+                    header += `\n⚠️ *Productos no incluidos:*\n${errores.join('\n')}\n`;
                 }
                 header += `\n_Genere el pedido aquí:_ https://www.one4cars.com/tomar_pedido.php/`;
                 return await safeSendMessage(from, { text: header });
