@@ -259,6 +259,14 @@ async function buscarCliente(rifLimpio) {
     return r[0] || null;
 }
 
+async function obtenerPorcentaje() {
+    try {
+        const [r] = await pool.execute("SELECT porcentaje FROM tab_porcentajes LIMIT 1");
+        if (r.length > 0) return parseFloat(r[0].porcentaje) || 1;
+    } catch (e) {}
+    return 1;
+}
+
 async function buscarProductoPorCodigo(codigo) {
     const codLimpio = codigo.trim();
     try {
