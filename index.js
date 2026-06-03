@@ -296,7 +296,7 @@ async function buscarProductoPorTexto(texto) {
         'quisiera', 'necesito', 'saludos', 'cordial', 'muchas', 'todo', 'bienvenidos',
         'bendiciones', 'exito', 'exitos', 'dia', 'tarde', 'noche', 'pregunta', 'consulta',
         'atento', 'atenta', 'saludo', 'estimados', 'estimado', 'buen', 'buena', 'bueno',
-        'se', 'me', 'le', 'te', 'lo', 'los', 'las', 'les', 'su', 'sus', 'mi', 'mis', 'martin',
+        'se', 'me', 'le', 'te', 'lo', 'los', 'las', 'les', 'su', 'sus', 'mi', 'mis',
         'tu', 'tus', 'nos', 'os', 'que', 'cual', 'cuales', 'quien', 'quienes',
         'cuando', 'porque', 'pues', 'pero', 'mas', 'muy', 'asi', 'aun', 'entre', 'sin',
         'sobre', 'tras', 'durante', 'mediante', 'excepto', 'segun', 'puede', 'puedo',
@@ -977,7 +977,20 @@ async function startBot() {
                 }
                 match = linea.match(/^\s*([A-Za-z0-9]{3,})\s*$/);
                 if (match) {
-                    itemsPedido.push({ codigo: match[1].toUpperCase(), cantidad: 1 });
+                    const cod = match[1].toUpperCase();
+                    if (/[A-Z]/.test(cod) && /[0-9]/.test(cod)) {
+                        itemsPedido.push({ codigo: cod, cantidad: 1 });
+                    }
+                    continue;
+                }
+                match = linea.match(/^\s*(.+?)\s+[-=]?\s*(\d{1,4})\s*$/);
+                if (match && match[1].length >= 4) {
+                    const txtDesc = match[1].trim();
+                    const qty = parseInt(match[2]);
+                    const prodDesc = await buscarProductoPorTexto(txtDesc);
+                    if (prodDesc && prodDesc.length > 0) {
+                        itemsPedido.push({ codigo: prodDesc[0].producto, cantidad: qty });
+                    }
                 }
             }
             const tieneMultiplesItems = itemsPedido.length >= 2;
