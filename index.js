@@ -169,7 +169,16 @@ async function buscarVendedor(jid, pushName) {
         "SELECT * FROM tab_vendedores WHERE REPLACE(REPLACE(celular_vendedor, ' ', ''), '+', '') LIKE ? OR REPLACE(REPLACE(telefono_vendedor, ' ', ''), '+', '') LIKE ? LIMIT 1", 
         [`%${telLimpio}%`, `%${telLimpio}%`]
     );
-    return r[0] || null;
+    if (r[0]) return r[0];
+    const jidDomain = jid.split('@')[1];
+    if (jidDomain && jidDomain.includes('lid') && pushName) {
+        const [r2] = await pool.execute(
+            "SELECT * FROM tab_vendedores WHERE nombre LIKE ? LIMIT 1",
+            [`%${pushName}%`]
+        );
+        if (r2[0]) return r2[0];
+    }
+    return null;
 }
 
 function detectarIntencionMenu(texto) {
