@@ -166,14 +166,14 @@ async function setModo(tel, modo) {
 async function buscarVendedor(jid, pushName) {
     const telLimpio = jid.split('@')[0].replace(/\D/g, ''); 
     const [r] = await pool.execute(
-        "SELECT * FROM tab_vendedores WHERE REPLACE(REPLACE(celular_vendedor, ' ', ''), '+', '') LIKE ? OR REPLACE(REPLACE(telefono_vendedor, ' ', ''), '+', '') LIKE ? LIMIT 1", 
+        "SELECT * FROM tab_vendedores WHERE REPLACE(REPLACE(celular_vendedor, ' ', ''), '+', '') LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci OR REPLACE(REPLACE(telefono_vendedor, ' ', ''), '+', '') LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci LIMIT 1", 
         [`%${telLimpio}%`, `%${telLimpio}%`]
     );
     if (r[0]) return r[0];
     const jidDomain = jid.split('@')[1];
     if (jidDomain && jidDomain.includes('lid') && pushName) {
         const [r2] = await pool.execute(
-            "SELECT * FROM tab_vendedores WHERE nombre LIKE ? LIMIT 1",
+            "SELECT * FROM tab_vendedores WHERE nombre LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci LIMIT 1",
             [`%${pushName}%`]
         );
         if (r2[0]) return r2[0];
@@ -253,7 +253,7 @@ async function guardarUsuario(jid, usuario, id_int) {
 async function buscarCliente(rifLimpio) {
     const soloNum = soloNumerosRIF(rifLimpio);
     const [r] = await pool.execute(
-        "SELECT id_cliente, nombres, celular, cedula, direccion, zona FROM tab_clientes WHERE clave = ? OR clave = ? OR clave LIKE ? LIMIT 1", 
+        "SELECT id_cliente, nombres, celular, cedula, direccion, zona FROM tab_clientes WHERE clave = ? OR clave = ? OR clave LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci LIMIT 1", 
         [rifLimpio, soloNum, `%${rifLimpio}%`]
     );
     return r[0] || null;
@@ -300,7 +300,7 @@ async function buscarProductoPorTexto(texto) {
     textoBuscado = textoBuscado.replace(/GRANCHEROKEE|GRANDCHEROKEE/gi, "GRAND CHEROKEE");
     textoBuscado = textoBuscado.replace(/GRANBLAZER|GRANDVLAZER/gi, "GRAND BLAZER");
     textoBuscado = textoBuscado.replace(/GRANVITARA|GRANDVITARA/gi, "GRAND VITARA");
-        textoBuscado = textoBuscado.replace(/SUPER\s*CARRY/gi, "SUPER CARRY");
+    textoBuscado = textoBuscado.replace(/SUPER\s*CARRY/gi, "SUPER CARRY");
     const txtNormal = normalizar(textoBuscado);
     // ====================================================
 
@@ -364,7 +364,7 @@ async function buscarProductoPorTexto(texto) {
 
     palabrasBase.forEach((pal, index) => {
         const formas = expandirFormas(pal);
-        const conditions = formas.map(() => "descripcion LIKE ?");
+        const conditions = formas.map(() => "descripcion LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci");
         whereClause += `(${conditions.join(" OR ")})`;
         if (index < palabrasBase.length - 1) whereClause += " AND ";
         formas.forEach(f => queryParams.push(`%${f}%`));
@@ -384,12 +384,12 @@ async function buscarProductoPorTexto(texto) {
     }
 
     const expandedTerms = [...new Set(palabrasBase.flatMap(expandirFormas))];
-    const orConditions = expandedTerms.map(() => "descripcion LIKE ?");
+    const orConditions = expandedTerms.map(() => "descripcion LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci");
     const orParams = expandedTerms.map(p => `%${p}%`);
 
     const relevanceParts = palabrasBase.map(p => {
         const formas = expandirFormas(p);
-        const cases = formas.map(f => `descripcion LIKE '%${f.replace(/[^a-z]/g, '')}%'`);
+        const cases = formas.map(f => `descripcion LIKE CONVERT('%${f.replace(/[^a-z]/g, '')}%' USING utf8) COLLATE utf8_spanish_ci`);
         return `(CASE WHEN ${cases.join(' OR ')} THEN 1 ELSE 0 END)`;
     });
     const relevanceSQL = relevanceParts.join(' + ');
@@ -412,7 +412,7 @@ async function buscarProductoPorTexto(texto) {
     if (minRelevance > 1 && palabrasBase.length > 1) {
         try {
             const sqlCatchall = `SELECT producto, descripcion, tipo, precio_minimo, (cantidad_existencia + cantidad_existencia_almacen) as stock_total, cantidad_fabricando FROM tab_productos WHERE ${orConditions.join(" OR ")} HAVING (${relevanceSQL}) >= 1 ORDER BY ${relevanceSQL} DESC LIMIT 8`;
-            const [rows] = await pool.execute(sqlCatchall, [...orParams, 1]);
+            const [rows] = await pool.execute(sqlCatchall, [...orParams]);
             if (rows.length > 0) return rows;
         } catch (e) {
             console.log("Error Intento 3:", e.message);
@@ -421,7 +421,6 @@ async function buscarProductoPorTexto(texto) {
 
     return null;
 }
-
 async function obtenerDetalleFacturas(id_cliente, id_vendedor = null) {
     let query = `
         SELECT f.id_factura, f.nro_factura, f.total, f.abono_factura, f.fecha_reg, f.porcentaje, f.descuento, f.total_desc,
