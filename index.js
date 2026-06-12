@@ -166,15 +166,17 @@ async function setModo(tel, modo) {
 async function buscarVendedor(jid, pushName) {
     const telLimpio = jid.split('@')[0].replace(/\D/g, ''); 
     const [r] = await pool.execute(
-        "SELECT * FROM tab_vendedores WHERE REPLACE(REPLACE(celular_vendedor, ' ', ''), '+', '') LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci OR REPLACE(REPLACE(telefono_vendedor, ' ', ''), '+', '') LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci LIMIT 1", 
+        "SELECT * FROM tab_vendedores WHERE REPLACE(REPLACE(celular_vendedor, ' ', ''), '+', '') LIKE ? OR REPLACE(REPLACE(telefono_vendedor, ' ', ''), '+', '') LIKE ? LIMIT 1", 
         [`%${telLimpio}%`, `%${telLimpio}%`]
     );
     if (r[0]) return r[0];
+    
     const jidDomain = jid.split('@')[1];
-    if (jidDomain && jidDomain.includes('lid') && pushName) {
+    // Modificado para que exija coincidencia exacta o un pushName válido y largo
+    if (jidDomain && jidDomain.includes('lid') && pushName && pushName.trim().length > 3) {
         const [r2] = await pool.execute(
-            "SELECT * FROM tab_vendedores WHERE nombre LIKE CONVERT(? USING utf8) COLLATE utf8_spanish_ci LIMIT 1",
-            [`%${pushName}%`]
+            "SELECT * FROM tab_vendedores WHERE nombre = ? LIMIT 1",
+            [pushName.trim()]
         );
         if (r2[0]) return r2[0];
     }
